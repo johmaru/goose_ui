@@ -1,78 +1,79 @@
-# Architecture & Performance — 内部設計と性能特性
+# Architecture & Performance
 
-`goose_ui` は、Goose 言語の **ゼロヒープ・データスタックモデル** を最大限に活かし、デスクトップ GUI フレームワークでありながら極小フットプリント・高レスポンスを実現しています。
+`goose_ui` leverages Goose's **zero-heap, compiler-managed data-stack model** to deliver a retained-mode desktop GUI framework with minimal memory footprint and fast first-frame latency.
 
 ---
 
-## 1. ゼロヒープ `root struct App` と世代付きハンドル
+## 1. Zero-Heap `root struct App` & Generational Handles
 
-従来の C++ GUI フレームワーク（Qt の `QObject` 等）はウィジェットごとに個別 `new` / `delete` や仮想関数テーブル・シグナルメタオブジェクトをヒープ上に確保しますが、`goose_ui` はすべてのデータを単一の `root struct App` 内の連続配列（独立データスタック）に集約しています（[`widget.goose`](../widget.goose)）。
+Traditional C++ GUI frameworks (such as Qt's `QObject`) heap-allocate individual widgets, vtables, and meta-object structures. `goose_ui` instead stores all application state inside contiguous arrays in a single `root struct App` ([`widget.goose`](../widget.goose)):
 
 ```
 root struct App
- ├── windows:     Window[>..]      // ウィンドウ状態・HWND/D2D/GDIフォント
- ├── widgets:     Widget[>..]      // 全ウィジェットのフラット配列
- ├── free_widgets:i64[>..]         // 破棄スロット再利用リスト
- ├── str_pool:    u8[>..]          // 共有文字列プール（StrSpan で参照）
- ├── list_items:  ListItem[>..]    // ListView / ComboBox / TabWidget の項目
- ├── connections: Connection[>..]  // 宣言的 Signal -> Slot 接続テーブル
- ├── timers:      TimerInfo[>..]   // アクティブタイマー一覧
- ├── signals:     Signal[>..]      // 1 フレームのシグナルキュー
- └── focus_order: WidgetId[>..]    // Tab 移動順キャッシュ
+ ├── windows:      Window[>..]      // Window state, HWND, D2D/GDI font caches
+ ├── widgets:      Widget[>..]      // Flat retained widget table
+ ├── free_widgets: i64[>..<]        // Recycled widget slot indices
+ ├── str_pool:     u8[>..]          // Shared byte pool referenced by StrSpan
+ ├── list_items:   ListItem[>..]    // Items for ListView, ComboBox, and TabWidget
+ ├── connections:  Connection[>..]  // Declarative Signal -> Slot table
+ ├── timers:       TimerInfo[>..]   // Active timers
+ ├── signals:      Signal[>..]      // Per-frame signal queue
+ └── focus_order:  WidgetId[>..<]   // Cached Tab traversal order
 ```
 
-### 世代付きハンドル (`WindowId`, `WidgetId`)
+### Generational Handles (`WindowId`, `WidgetId`)
 
-ポインタの代わりに `{ index: i32, gen: u32 }` の 8 バイト値ハンドルを使用します。
+Instead of raw pointers, widgets and windows are referenced by 8-byte value handles `{ index: i32, gen: u32 }`:
 
-- `destroy_widget(id)` でウィジェットを破棄するとスロットは `free_widgets` に返却され、再利用時に `gen` がインクリメントされます。
-- 破棄済みの古い `WidgetId` を渡しても `valid_widget` が `false` を返すため、ダングリングポインタ（Use-After-Free）が構造上起きません。
-
----
-
-## 2. メモリ最適化のポイント
-
-### 共有文字列プール (`App.str_pool` ＋ 12 バイト `StrSpan`)
-
-各 `Widget` が固定長バッファ（例: `u8[..256]` × 4 フィールド = ~1 KB）を持つと、ラベルやパネルを数千個並べた際にほぼ空のバイト列がメモリを圧迫します。
-
-`goose_ui` では、`text`, `placeholder`, `tooltip`, `name`, `subtext` をすべて 12 バイトの `StrSpan { off, len, cap }` で表現し、実データだけを `App.str_pool` に詰めます。
-
-- **インプレース再利用**: `str_set` は新しい文字列長 `n <= s.cap` であれば既存の領域を上書きするため、カウンター表示やステータスバー更新のような頻繁なテキスト書き換えでも **追加領域を 0 バイト** に抑えます。
-- **実測効果**: 5,000 個のコントロール（総計 6,003 ノード）の文字列プール合計はわずか **31.8 KB** です。
-
-### パック済み `WidgetStyle`（24 バイト）
-
-ウィジェット個別の色上書き（`bg`, `fg`, `border`）は 16 バイトの `Color { f32 × 4 }` をそのまま持たず、`u32` パック RGBA（4 バイト）＋ `flags: u8` ビットマスクで圧縮しています。
-
-結果として、1 ウィジェットあたりの実測増分メモリは **約 350 バイト**（Qt 6 Widgets の約 1/8.5）に収まっています。
+- `destroy_widget(id)` recursively cleans up children, returns slots to `free_widgets`, and increments `gen` on reuse.
+- Passing a stale handle fails `valid_widget` / `valid_window` cleanly, preventing use-after-free bugs by construction.
 
 ---
 
-## 3. デュアル描画バックエンドの設計
+## 2. Memory Layout Optimizations
 
-| 観点 | `RenderBackend.Software` | `RenderBackend.Direct2D` |
+### Shared String Pool (`App.str_pool` + 12-byte `StrSpan`)
+
+Giving every `Widget` fixed inline buffers (e.g. `u8[..256]` × 4 fields ≈ 1 KB) wastes memory when thousands of panels, spacers, or short labels exist.
+
+`goose_ui` stores `text`, `placeholder`, `tooltip`, `name`, and `subtext` as 12-byte `StrSpan { off, len, cap }` handles into `App.str_pool`:
+
+- **In-place reuse**: When updating a string with `n <= s.cap`, `str_set` overwrites the existing span in place with **0 bytes** of additional pool growth (ideal for counters, status bars, and live labels).
+- **Measured footprint**: 5,000 mixed controls (6,003 total widget nodes) use only **31.8 KB** in `str_pool`.
+
+### Packed `WidgetStyle` (24 bytes)
+
+Per-widget color overrides (`bg`, `fg`, `border`) are stored as packed `u32` RGBA values plus an 8-bit `flags` mask rather than 16-byte `Color` structs.
+
+Combined, the measured incremental memory cost is **~350 bytes per widget** (~8.5× smaller than Qt 6 Widgets).
+
+---
+
+## 3. Dual Rendering Backend Architecture
+
+| Aspect | `RenderBackend.Software` | `RenderBackend.Direct2D` |
 | --- | --- | --- |
-| 描画 API | Win32 ダブルバッファ GDI (`begin_paint` / `end_paint`) + ClearType `CreateFontA` | Direct2D (`ID2D1HwndRenderTarget`) + DirectWrite |
-| 初期化コスト | **d2d1 / d3d11 DLL を一切ロードしない**（GPU ドライバ常駐メモリ ~56 MB を回避） | GPU コンテキスト＋スワップチェーン初期化あり |
-| フォント管理 | ウィンドウあたり 6 本の `HFONT`（`GdiFontSet`） | `win32-goose` の `W32_MAX_D2D_FONTS = 64` 制約に合わせて 6 本（`FontSet`）＋動的 `set_align` |
-| `Canvas` 座標系 | `Painter.ox / oy` ソフトウェア平行移動 | `d2d.set_transform` による GPU 平行移動 |
-| 半透明色 | テーマ背景色 `surface_bg` への事前アルファブレンド (`gdi_colorref`) | ハードウェアアルファブレンディング |
+| Rendering API | Double-buffered Win32 GDI (`begin_paint` / `end_paint`) + ClearType `CreateFontA` | Direct2D (`ID2D1HwndRenderTarget`) + DirectWrite |
+| Startup Footprint | **Never loads `d2d1` / `d3d11`** (avoids ~56 MB GPU driver baseline) | Initializes GPU device & swap chain |
+| Font Cache | 6 `HFONT` handles per window (`GdiFontSet`) | 6 `IDWriteTextFormat` handles per window (`FontSet`, fitting `W32_MAX_D2D_FONTS = 64`) with dynamic `set_align` |
+| Clipping | Hardware GDI `SaveDC` / `IntersectClipRect` / `RestoreDC` | Bounding-box culling per viewport |
+| `Canvas` Coordinates | Software translation via `Painter.ox / oy` + clip rect | GPU translation via `d2d.set_transform` |
+| Translucency | Pre-composited onto `theme.surface_bg` (`gdi_colorref`) | Hardware alpha blending |
 
 ---
 
-## 4. ベンチマーク手法と詳細結果
+## 4. Benchmark Methodology & Results
 
-### 測定条件
+### Test Environment
 
-- **環境**: Windows 11 x64 / NVIDIA GeForce RTX 5070 Ti
-- **ビルド**: Goose v2026.4 + Clang `-O2` / Qt 6.11.1 MinGW `g++ -O2` / Python 3.14 Tkinter
-- **シナリオ**: `ScrollArea` 内に `N` 個の混合コントロール（`Label`, `LineEdit`, `CheckBox`, `ProgressBar`, `Button`）を生成・レイアウト・初回描画した直後に、各独立プロセス内で `K32GetProcessMemoryInfo`（`PROCESS_MEMORY_COUNTERS_EX`）の `PrivateUsage`（Private Bytes）と `WorkingSetSize`（Working Set）を計測。
-- **再現コマンド**: `pwsh -File bench/run_bench.ps1`（ソースは [`bench/`](../bench) 配下）
+- **Machine**: Windows 11 x64 / NVIDIA GeForce RTX 5070 Ti
+- **Toolchains**: Goose v2026.4 + Clang `-O2` / Qt 6.11.1 MinGW `g++ -O2` / Python 3.14 Tkinter
+- **Scenario**: Construct, lay out, and perform the first paint of `N` mixed controls (`Label`, `LineEdit`, `CheckBox`, `ProgressBar`, `Button` inside a `ScrollArea`), then query `K32GetProcessMemoryInfo` (`PROCESS_MEMORY_COUNTERS_EX`) inside each isolated process.
+- **Reproduce**: `pwsh -File bench/run_bench.ps1` (sources under [`bench/`](../bench))
 
 ### Private Bytes (MB)
 
-| フレームワーク | バックエンド | 0 個 | 100 個 | 1,000 個 | 5,000 個 | 1個あたり増分 |
+| Framework | Backend | 0 ctrl | 100 ctrl | 1,000 ctrl | 5,000 ctrl | Per-Widget Delta |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | **`goose_ui` (Software)** | GDI + ClearType (CPU) | **9.17** | 10.38 | **10.34** | **11.25** | **~350 B** |
 | **`goose_ui` (Headless)** | Pure Data Stack | 8.09 | 9.15 | 9.12 | 10.30 | ~370 B |
@@ -81,27 +82,27 @@ root struct App
 | **Qt 6.11.1 Quick / QML** | Direct3D 11 RHI (GPU) | 88.37 | 104.19 | 180.85 | — | ~77 KB (~220×) |
 | **Python 3.14 Tkinter** | Tcl/Tk (CPU) | 14.40 | 16.58 | 21.52 | — | ~5.9 KB (17×) |
 
-### Working Set (MB)・初回描画時間・配布サイズ
+### Working Set (MB), First-Frame Latency & Distributable Size
 
-| フレームワーク | 0個 WS | 1,000個 WS | 5,000個 WS | 1,000個 時間 | 5,000個 時間 | 配布サイズ |
+| Framework | 0 ctrl WS | 1,000 ctrl WS | 5,000 ctrl WS | 1,000 ctrl Time | 5,000 ctrl Time | Distributable Size |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`goose_ui` (Software)** | **21.97** | **22.30** | **24.02** | **32.7 ms** | **35.8 ms** | **386 KB**（単体 `.exe`） |
-| **`goose_ui` (Direct2D)** | 55.18 | 56.59 | 58.08 | 216.3 ms | 197.6 ms | **386 KB**（単体 `.exe`） |
-| **Qt 6.11.1 Widgets** | 42.29 | 48.13 | 63.86 | 317.9 ms | 380.9 ms | 32.3 MB（`.exe` + Qt/MinGW DLL） |
-| **Qt 6.11.1 Quick / QML** | 92.74 | 177.52 | — | 673.0 ms | — | > 40 MB（Qt/QML/Controls DLL） |
-| **Python 3.14 Tkinter** | 31.81 | 51.31 | — | 1,435.7 ms | — | Python + Tcl/Tk ランタイム |
+| **`goose_ui` (Software)** | **21.97** | **22.30** | **24.02** | **32.7 ms** | **35.8 ms** | **386 KB** (single `.exe`) |
+| **`goose_ui` (Direct2D)** | 55.18 | 56.59 | 58.08 | 216.3 ms | 197.6 ms | **386 KB** (single `.exe`) |
+| **Qt 6.11.1 Widgets** | 42.29 | 48.13 | 63.86 | 317.9 ms | 380.9 ms | 32.3 MB (`.exe` + Qt/MinGW DLLs) |
+| **Qt 6.11.1 Quick / QML** | 92.74 | 177.52 | — | 673.0 ms | — | > 40 MB (Qt/QML/Controls DLLs) |
+| **Python 3.14 Tkinter** | 31.81 | 51.31 | — | 1,435.7 ms | — | Python + Tcl/Tk runtime |
 
-### モジュール依存関係
+### Module Graph
 
 ```
-goose_ui.goose (公開エントリ)
- ├── types.goose    (基本型・ハンドル・列挙・Signal・ANCHOR_*)
- ├── theme.goose    (Theme・WidgetStyle・UTF-8 メトリクス)
- ├── widget.goose   (Widget・Window・root struct App)
- ├── tree.goose     (ライフサイクル・str_pool・フォント・add_*/set_*・connect)
- ├── layout.goose   (2パスレイアウトエンジン・Anchor 絶対配置)
- ├── painter.goose  (Software GDI / Direct2D デュアル描画・各ウィジェット描画)
- ├── events.goose   (ヒットテスト・フォーカス・編集・イベントループ・inject_*)
- ├── native.goose   (Win32 メニュー・ダイアログ・クリップボード・タイマー・D&D)
- └── dsl.goose      (スコープ付きネスト DSL: Ui / Node)
+goose_ui.goose (public entry point)
+ ├── types.goose    (geometry, handles, enums, Signal, ANCHOR_*)
+ ├── theme.goose    (Theme, packed WidgetStyle, UTF-8 text metrics)
+ ├── widget.goose   (Widget, Window, ListItem, TimerInfo, root struct App)
+ ├── tree.goose     (lifecycle, str_pool, font caches, add_*/set_*, connect)
+ ├── layout.goose   (two-pass layout engine & Anchor absolute positioning)
+ ├── painter.goose  (Software GDI / Direct2D dual painter & widget renderers)
+ ├── events.goose   (hit testing, focus, input editing, event loop, inject_*)
+ ├── native.goose   (Win32 menus, dialogs, clipboard, timers, drag & drop)
+ └── dsl.goose      (scoped nested DSL: Ui / Node)
 ```

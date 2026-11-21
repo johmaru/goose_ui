@@ -22,11 +22,11 @@ A **zero-heap, dual-backend retained-mode GUI framework** for the [Goose](https:
 
 | Document | Contents |
 | --- | --- |
-| [Getting Started (`docs/getting-started.md`)](docs/getting-started.md) | 環境構築、サブモジュール初期化、バックエンド選択、最小アプリの構築、ネイティブ `.exe` ビルド |
-| [UI DSL & Layout Guide (`docs/dsl-and-layout.md`)](docs/dsl-and-layout.md) | スコープ付きネスト DSL、全コンテナ、2パスレイアウト規則、Win32/WinForms 風 `Anchor` 絶対配置、低レベル API |
-| [Widgets, Events & Native API (`docs/widgets-and-events.md`)](docs/widgets-and-events.md) | 全 21 ウィジェット、修飾子、`Signal`・Win32 アクション ID・宣言的 `connect`、`Canvas`/`Painter`、ネイティブダイアログ・メニュー・ヘッドレステスト |
-| [Architecture & Performance (`docs/architecture.md`)](docs/architecture.md) | ゼロヒープ `root struct App`、世代付きハンドル、`str_pool`＋`StrSpan`、GDI/D2D デュアルバックエンド、ベンチマーク詳細 |
-| [Developer & Agent Guide (`Agent.md`)](Agent.md) | 保守時の不変条件、Goose v2026.4 コンパイラ注意点、検証コマンド一覧 |
+| [Getting Started (`docs/getting-started.md`)](docs/getting-started.md) | Prerequisites, submodule setup, backend selection, minimal app lifecycle, and standalone `.exe` builds |
+| [UI DSL & Layout Guide (`docs/dsl-and-layout.md`)](docs/dsl-and-layout.md) | Scoped nested DSL, all layout containers, two-pass layout rules, Win32/WinForms-style `Anchor` absolute placement, and low-level API |
+| [Widgets, Events & Native API (`docs/widgets-and-events.md`)](docs/widgets-and-events.md) | All 21 widgets, fluent modifiers, `Signal` dispatch, Win32 action IDs, declarative `connect`, `Canvas`/`Painter`, native dialogs/menus, and headless testing |
+| [Architecture & Performance (`docs/architecture.md`)](docs/architecture.md) | Zero-heap `root struct App`, generational handles, `str_pool` + `StrSpan`, Software GDI / Direct2D dual backends, and benchmark methodology |
+| [Developer & Agent Guide (`Agent.md`)](Agent.md) | Maintenance invariants, Goose v2026.4 compiler caveats, and verification commands |
 
 ## Qt / Win32 → goose_ui Concept Mapping
 
@@ -50,7 +50,7 @@ A **zero-heap, dual-backend retained-mode GUI framework** for the [Goose](https:
 Clone with submodules:
 
 ```powershell
-git clone --recursive <repo-url>
+git clone --recursive https://github.com/johmaru/goose_ui.git
 # Or if already cloned:
 git submodule update --init --recursive
 ```

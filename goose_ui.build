@@ -1,0 +1,5 @@
+// goose_ui package build configuration.
+// Pure Goose GUI framework built on top of the win32-goose submodule.
+
+main_thread_only = true;
+exclude = ["win32-goose", "examples", "test", "bench"];

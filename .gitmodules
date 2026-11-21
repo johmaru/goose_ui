@@ -1,0 +1,3 @@
+[submodule "win32-goose"]
+	path = win32-goose
+	url = https://github.com/johmaru/win32-goose

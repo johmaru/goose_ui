@@ -1,0 +1,16 @@
+# Built executables & generated C
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.o
+*.lib
+*.dll
+*.c
+!win32-goose/src/*.c
+bench/results.json
+
+# Local editor & OS files
+.vscode/
+.DS_Store
+Thumbs.db

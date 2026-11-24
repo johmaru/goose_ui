@@ -168,6 +168,28 @@ fn destroy_gdi_fonts(fs: GdiFontSet&) {
     fs = GdiFontSet {};
 }
 
+fn create_gl2d_fonts(gl2d: win32::Gl2dTarget, t: const Theme&) -> Gl2dFontSet {
+    var fs = Gl2dFontSet {};
+    guard gl2d.is_valid() else { return fs; }
+    fs.body = gl2d.create_font("Segoe UI", t.font_size_body * 1.15, 400, false);
+    fs.body_bold = gl2d.create_font("Segoe UI", t.font_size_body * 1.15, 600, false);
+    fs.heading = gl2d.create_font("Segoe UI", t.font_size_heading * 1.15, 600, false);
+    fs.subheading = gl2d.create_font("Segoe UI", t.font_size_subheading * 1.15, 600, false);
+    fs.caption = gl2d.create_font("Segoe UI", t.font_size_caption * 1.15, 400, false);
+    fs.mono = gl2d.create_font("Consolas", t.font_size_mono * 1.15, 400, false);
+    return fs;
+}
+
+fn destroy_gl2d_fonts(fs: Gl2dFontSet&) {
+    if fs.body.is_valid() { fs.body.destroy(); }
+    if fs.body_bold.is_valid() { fs.body_bold.destroy(); }
+    if fs.heading.is_valid() { fs.heading.destroy(); }
+    if fs.subheading.is_valid() { fs.subheading.destroy(); }
+    if fs.caption.is_valid() { fs.caption.destroy(); }
+    if fs.mono.is_valid() { fs.mono.destroy(); }
+    fs = Gl2dFontSet {};
+}
+
 fn set_theme(app: App&, t: Theme) {
     app.theme = t;
     for i in app.windows.len {
@@ -182,6 +204,13 @@ fn set_theme(app: App&, t: Theme) {
                     Software => {
                         destroy_gdi_fonts(app.windows[i].gdi_fonts);
                         app.windows[i].gdi_fonts = create_gdi_fonts(app.theme);
+                    },
+                    OpenGL => {
+                        destroy_gl2d_fonts(app.windows[i].gl2d_fonts);
+                        app.windows[i].gl2d_fonts = create_gl2d_fonts(app.windows[i].gl2d, app.theme);
+                        if app.windows[i].gl2d.is_valid() {
+                            app.windows[i].gl2d.clear_text_cache();
+                        }
                     },
                 }
             }
@@ -574,8 +603,10 @@ fn create_window_with_backend(
     hwnd.set_corner_preference(win32::DWMWCP_ROUND);
 
     var d2d = win32::D2dTarget {};
+    var gl2d = win32::Gl2dTarget {};
     var fonts = FontSet {};
     var gdi_fonts = GdiFontSet {};
+    var gl2d_fonts = Gl2dFontSet {};
 
     match backend {
         Direct2D => {
@@ -589,6 +620,14 @@ fn create_window_with_backend(
         Software => {
             gdi_fonts = create_gdi_fonts(app.theme);
         },
+        OpenGL => {
+            gl2d = win32::gl2d_create(hwnd, true);
+            guard gl2d.is_valid() else {
+                hwnd.destroy();
+                return WINDOW_NONE;
+            }
+            gl2d_fonts = create_gl2d_fonts(gl2d, app.theme);
+        },
     }
 
     let wid = alloc_window_slot(app);
@@ -601,8 +640,10 @@ fn create_window_with_backend(
     app.windows[wid.index].backend = backend;
     app.windows[wid.index].hwnd = hwnd;
     app.windows[wid.index].d2d = d2d;
+    app.windows[wid.index].gl2d = gl2d;
     app.windows[wid.index].fonts = fonts;
     app.windows[wid.index].gdi_fonts = gdi_fonts;
+    app.windows[wid.index].gl2d_fonts = gl2d_fonts;
     app.windows[wid.index].width = cw;
     app.windows[wid.index].height = ch;
     app.windows[wid.index].dpi = hwnd.dpi();
@@ -733,9 +774,14 @@ fn close_window(app: App&, win: WindowId) {
     if !app.windows[win.index].headless {
         destroy_window_fonts(app.windows[win.index].fonts);
         destroy_gdi_fonts(app.windows[win.index].gdi_fonts);
+        destroy_gl2d_fonts(app.windows[win.index].gl2d_fonts);
         if app.windows[win.index].d2d.is_valid() {
             app.windows[win.index].d2d.destroy();
             app.windows[win.index].d2d = win32::D2dTarget {};
+        }
+        if app.windows[win.index].gl2d.is_valid() {
+            app.windows[win.index].gl2d.destroy();
+            app.windows[win.index].gl2d = win32::Gl2dTarget {};
         }
         let had_hwnd = app.windows[win.index].hwnd.is_valid();
         if had_hwnd {
@@ -765,6 +811,11 @@ fn destroy_all(app: App&) {
             let wid = WindowId { index: i as! i32, gen: app.windows[i].gen };
             app.close_window(wid);
         }
+    }
+    if app.log.file.is_valid() {
+        app.log.file.flush();
+        app.log.file.close();
+        app.log.file = win32::Hfile {};
     }
 }
 

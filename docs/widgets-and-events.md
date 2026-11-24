@@ -167,7 +167,68 @@ app.exec_with_canvas(paint_canvas) { sig =>
 
 ---
 
-## 7. Headless Automated Testing
+## 7. Structured JSON Logging (`log.goose`)
+
+`goose_ui` includes a pure-Goose, zero-heap structured JSON logging system powered by Goose's standard `json` module and `win32-goose`. You always specify the output path explicitly—no hardcoded log directory is assumed.
+
+### `App`-Integrated Logging
+
+```goose
+app.log_open("logs/app.jsonl", goose_ui::LogOptions {
+    min_level: goose_ui::LogLevel.Debug,
+    format: goose_ui::LogFormat.JsonLines, // or LogFormat.JsonArray
+    append: true,
+    auto_flush: true,
+    also_stderr: false,
+    utc: false,
+    include_process_info: true,
+    create_dirs: true,
+    max_file_bytes: 5 * 1024 * 1024, // 0 disables rotation
+    max_backups: 3,
+    log_ui_events: false,            // true logs every Signal automatically at Debug level
+});
+
+app.log_info("Application started");
+app.log_warn("auth", "Token expiring soon");
+app.log_error_with("io", "Failed to load asset") { f =>
+    f.text("path", asset_path)
+     .int("retry", 2)
+     .flag("fatal", false);
+    f.obj("meta") { m => m.text("backend", "software"); };
+    f.arr("codes") { a => a.int(404).int(500); };
+};
+```
+
+Key `App` helpers:
+- Lifecycle: `log_open(path, opts?)`, `log_close()`, `log_flush()`, `log_is_open()`, `log_path()`, automatically flushed and closed by `app.destroy_all()`.
+- Configuration & stats: `log_set_level(lvl)`, `log_level()`, `log_set_stderr(bool)`, `log_set_auto_flush(bool)`, `log_set_ui_events(bool)`, `log_count()`, `log_bytes_written()`.
+- Emitters: `log_msg(lvl, target, msg)`, `log_with(lvl, target, msg) { f => ... }`, plus level shorthands `log_trace`, `log_debug`, `log_info`, `log_warn`, `log_error`, `log_fatal` (each supporting `(msg)`, `(target, msg)`, and `*_with(target, msg) { f => ... }`).
+- Structured builders (`LogFields` / `LogArray`): `.text`, `.int`, `.uint`, `.num`, `.flag`, `.nil`, `.raw_json`, `.obj`, `.arr`, plus GUI helpers `.window_id`, `.widget_id`, `.rect`, `.color`. Filtered-out levels skip evaluating the trailing block.
+
+### Standalone `JsonLogger` & Reading Logs
+
+Use `goose_ui::JsonLogger` independently of `App`:
+
+```goose
+var logger = goose_ui::JsonLogger { .. };
+logger.open("C:/path/to/custom.json", goose_ui::LogOptions {
+    format: goose_ui::LogFormat.JsonArray,
+    utc: true,
+    include_process_info: false,
+});
+logger.info_with("worker", "Task finished") { f => f.num("ms", 12.5); };
+logger.close();
+
+let count, ok = goose_ui::each_json_log_entry("C:/path/to/custom.json") { entry =>
+    print(entry.ts, " [", entry.level_text, "] ", entry.msg);
+};
+```
+
+Utility functions: `log_level_name(lvl)` and `parse_log_level(s) -> LogLevel, bool`.
+
+---
+
+## 8. Headless Automated Testing
 
 Test layout geometry, pointer/keyboard interaction, and emitted `Signal`s without creating OS windows or GPU contexts (see [`test/goose_ui_test.goose`](../test/goose_ui_test.goose)):
 

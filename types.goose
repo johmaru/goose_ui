@@ -181,6 +181,7 @@ fn unpack_rgba(v: u32) -> Color {
 enum RenderBackend {
     Software, // Ultra-light double-buffered GDI + ClearType (no GPU driver overhead)
     Direct2D, // Hardware-accelerated Direct2D + DirectWrite GPU rendering
+    OpenGL,   // Hardware-accelerated OpenGL 3.3 Core SDF + GPU VRAM atlas rendering
 }
 
 // Compact 12-byte handle into App.str_pool (replaces large inline u8[..N] arrays).
@@ -362,3 +363,63 @@ struct MenuHandle {
 }
 
 fn is_valid(m: MenuHandle) -> bool { m.raw.is_valid() }
+
+// --- JSON Logging Types -----------------------------------------------------
+
+enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+    Off,
+}
+
+enum LogFormat {
+    JsonLines, // NDJSON: one RFC 8259 JSON object per line (default, append-friendly, crash-safe)
+    JsonArray, // Single valid RFC 8259 JSON array `[ ... ]` maintained on every write
+}
+
+struct LogOptions {
+    min_level: LogLevel = LogLevel.Info,
+    format: LogFormat = LogFormat.JsonLines,
+    append: bool = true,
+    auto_flush: bool = true,
+    also_stderr: bool = false,
+    utc: bool = false,
+    include_process_info: bool = true,
+    create_dirs: bool = true,
+    max_file_bytes: i64 = 0,
+    max_backups: i32 = 3,
+    log_ui_events: bool = false,
+}
+
+struct LogState {
+    file: win32::Hfile = win32::Hfile {},
+    min_level_rank: i32 = 2, // LogLevel.Info
+    format_code: i32 = 0,    // 0 = JsonLines, 1 = JsonArray
+    auto_flush: bool = true,
+    also_stderr: bool = false,
+    utc: bool = false,
+    include_process_info: bool = true,
+    ui_events: bool = false,
+    has_array_entries: bool = false,
+    max_file_bytes: i64 = 0,
+    max_backups: i32 = 3,
+    written_bytes: i64 = 0,
+    array_end_pos: i64 = 0,
+    seq: u64 = 0,
+}
+
+struct LogEntryView {
+    ts: const u8[:] = "",
+    seq: i64 = 0,
+    level: LogLevel = LogLevel.Info,
+    level_text: const u8[:] = "",
+    target: const u8[:] = "",
+    msg: const u8[:] = "",
+    pid: i64 = 0,
+    tid: i64 = 0,
+    raw_json: const u8[:] = "",
+}

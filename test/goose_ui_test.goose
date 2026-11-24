@@ -5,6 +5,7 @@
 // Run with:   goose run test/goose_ui_test.goose
 // Build with: goose build test/goose_ui_test.goose
 import std;
+import json;
 import win32 from "../win32-goose";
 import goose_ui from "..";
 
@@ -370,6 +371,51 @@ fn test_software_gdi_and_str_pool() {
 
     app.destroy_all();
     print("[OK] Software GDI + ClearType backend & zero-alloc string pool reuse");
+}
+
+fn test_opengl_backend_render() {
+    var app = goose_ui::App { .. };
+    app.init(true, goose_ui::RenderBackend.OpenGL);
+    let win = app.create_window("goose_ui OpenGL 3.3 Test", 480, 320);
+    assert(app.valid_window(win));
+    assert(app.windows[win.index].gl2d.is_valid());
+    assert(!app.windows[win.index].d2d.is_valid());
+
+    let root = app.root(win);
+    app.set_padding(root, 12.0);
+    app.add_label(root, "OpenGL 3.3 GPU + 日本語アトラス", goose_ui::FontRole.Heading);
+    app.add_button(root, "Primary", goose_ui::ButtonVariant.Primary);
+    let sc = app.add_scroll_area(root);
+    app.set_stretch(sc, 1.0);
+    let c = app.add_canvas(sc, 160.0, 90.0);
+
+    app.windows[win.index].visible = true;
+    var canvas_painted = false;
+    var px: u32 = 0;
+    app.render_window_with(win) { cid, p =>
+        if goose_ui::eq(cid, c) {
+            p.fill_rounded_rect(4.0, 4.0, p.width - 8.0, p.height - 8.0, 6.0, goose_ui::rgb(34, 211, 238));
+            p.draw_text("OpenGL 日本語 Canvas", 12.0, 10.0, 140.0, 24.0, goose_ui::rgb(15, 23, 42));
+            let r = app.widget_rect(c);
+            let canvas_x = (r.x + 40.0) as! i32;
+            let canvas_y = (r.y + 40.0) as! i32;
+            // Read back before end_draw() swaps buffers on GL_BACK.
+            assert(p.gl2d.readback_pixel(canvas_x, canvas_y, px));
+            canvas_painted = true;
+        }
+    };
+    assert(canvas_painted);
+
+    let rch = px & 0xFF;
+    let gch = (px >> 8) & 0xFF;
+    let bch = (px >> 16) & 0xFF;
+    assert(rch <= 45 && gch >= 200 && bch >= 225);
+
+    app.toggle_theme();
+    app.render_window(win);
+
+    app.destroy_all();
+    print("[OK] OpenGL 3.3 Core SDF + GPU VRAM atlas backend (RenderBackend.OpenGL)");
 }
 
 fn test_dsl_and_win32_anchors() {
@@ -765,6 +811,332 @@ fn test_regressions_layout_and_pools() {
     print("[OK] layout constraints, Splitter/GroupBox/Anchor/TabWidget & pool reuse regressions");
 }
 
+fn count_lines_and_validate_json(path: const u8[:]) -> i64 {
+    var content: u8[>..] = [];
+    assert(win32::read_file_bytes(path, content));
+    var count: i64 = 0;
+    var pos: i64 = 0;
+    while pos < content.len {
+        var nl = pos;
+        while nl < content.len && content[nl] != '\n' {
+            nl += 1;
+        }
+        let line = trim(content[pos..nl]);
+        pos = if nl < content.len { nl + 1 } else { nl };
+        if line.len == 0 { continue; }
+        var doc: json::Node[>..] = [];
+        var decoded: u8[>..] = [];
+        let root, _err = json::parse(line, doc, decoded);
+        assert(root != null);
+        count += 1;
+    }
+    return count;
+}
+
+fn test_json_logging() {
+    let raw_tmp = win32::temp_dir();
+    let sep = if raw_tmp.len > 0 && (raw_tmp[raw_tmp.len - 1] == '\\' || raw_tmp[raw_tmp.len - 1] == '/') { "" } else { "\\" };
+    let base_dir = str(raw_tmp, sep, "goose_ui_log_test_", win32::GetCurrentProcessId());
+    let nested_dir = str(base_dir, "\\nested");
+    let utf8_dir = str(nested_dir, "\\日本語");
+
+    let path_jsonl = str(utf8_dir, "\\app.jsonl");
+    let path_switch = str(base_dir, "\\switched.jsonl");
+    let path_arr = str(base_dir, "\\events.json");
+    let path_rot = str(base_dir, "\\rotate.jsonl");
+    let path_standalone = str(base_dir, "\\standalone.jsonl");
+    let path_ui = str(base_dir, "\\ui_events.jsonl");
+
+    // 1. Level parsing & formatting helpers
+    let lvl_w, ok_w = goose_ui::parse_log_level("WARN");
+    assert(ok_w && goose_ui::log_level_name(lvl_w) == "warn");
+    let lvl_e, ok_e = goose_ui::parse_log_level("  Error ");
+    assert(ok_e && goose_ui::log_level_name(lvl_e) == "error");
+    let _lvl_bad, ok_bad = goose_ui::parse_log_level("bogus");
+    assert(!ok_bad);
+
+    // 2. Invalid path & create_dirs=false checks
+    var app = goose_ui::App { .. };
+    assert(!app.log_open(""));
+    assert(!app.log_open(str(base_dir, "\\")));
+    assert(!app.log_open(str(base_dir, "\\missing_sub\\blocked.jsonl"), goose_ui::LogOptions { create_dirs: false }));
+    assert(!app.log_is_open());
+
+    // 3. User-specified nested UTF-8 path (JsonLines), filtering, escaping & fields
+    assert(app.log_open(path_jsonl, goose_ui::LogOptions { append: false }));
+    assert(app.log_is_open());
+    assert(app.log_path() == path_jsonl);
+    assert(goose_ui::log_level_name(app.log_level()) == "info");
+
+    var skipped_called = false;
+    assert(!app.log_trace("dropped trace"));
+    assert(!app.log_debug("dbg", "dropped debug"));
+    assert(!app.log_debug_with("dbg", "dropped with") { f =>
+        skipped_called = true;
+        f.text("k", "v");
+    });
+    assert(!skipped_called);
+    assert(app.log_count() == 0);
+
+    assert(app.log_info("net", "Line1\n\"quoted\"\\日本語"));
+    assert(app.log_warn_with("ui", "empty fields") { _f => });
+
+    let dummy_win = goose_ui::WindowId { index: 1, gen: 2 };
+    let dummy_wid = goose_ui::WidgetId { index: 3, gen: 4 };
+    assert(app.log_error_with("render", "complex payload") { f =>
+        f.text("user", "あいう\"\\")
+         .int("count", -42)
+         .uint("uval", 99)
+         .num("ratio", 1.5)
+         .flag("ok", true)
+         .nil("extra")
+         .raw_json("raw", "{\"k\":1}")
+         .window_id("win", dummy_win)
+         .widget_id("wid", dummy_wid)
+         .rect("box", goose_ui::rect(1.0, 2.0, 30.0, 40.0))
+         .color("fg", goose_ui::rgb(255, 128, 0));
+        f.obj("meta") { m =>
+            m.text("backend", "software").int("ver", 2);
+        };
+        f.arr("tags") { a =>
+            a.text("ui").int(7).uint(8).num(2.5).flag(false).nil().raw_json("{\"r\":true}");
+            a.obj() { o => o.text("nested", "yes"); };
+            a.arr() { sub => sub.int(1).int(2); };
+        };
+    });
+
+    app.log_set_level(goose_ui::LogLevel.Trace);
+    assert(app.log_trace_with("tr", "trace msg") { f => f.int("v", 1); });
+    assert(app.log_warn("warn msg"));
+    assert(app.log_fatal("fatal msg"));
+    assert(app.log_fatal_with("ft", "fatal with") { f => f.flag("aborting", false); });
+    assert(app.log_msg(goose_ui::LogLevel.Debug, "core", "generic msg"));
+    assert(app.log_with(goose_ui::LogLevel.Info, "core", "generic with") { f => f.text("mode", "ok"); });
+    assert(app.log_flush());
+    assert(app.log_count() == 9);
+    assert(app.log_bytes_written() > 0);
+
+    // Parse and validate every emitted JsonLines line
+    assert(count_lines_and_validate_json(path_jsonl) == 9);
+    var line_idx: i64 = 0;
+    let r_cnt, r_ok = goose_ui::each_json_log_entry(path_jsonl) { e =>
+        var doc: json::Node[>..] = [];
+        var decoded: u8[>..] = [];
+        let root, _err = json::parse(e.raw_json, doc, decoded);
+        assert(root != null);
+        if line_idx == 0 {
+            assert(e.seq == 1);
+            assert(e.level_text == "info");
+            assert(e.target == "net");
+            assert(e.msg == "Line1\n\"quoted\"\\日本語");
+            assert(e.pid > 0 && e.tid > 0);
+            assert(e.ts.len == 23);
+        } else if line_idx == 1 {
+            assert(e.level_text == "warn");
+            assert(json::member(root, "fields") == null);
+        } else if line_idx == 2 {
+            assert(e.level_text == "error");
+            let flds = json::member(root, "fields");
+            assert(flds != null);
+            let u_s, u_ok = json::as_string(json::member(flds, "user"));
+            assert(u_ok && u_s == "あいう\"\\");
+            let c_v, c_ok = json::as_i64(json::member(flds, "count"));
+            assert(c_ok && c_v == -42);
+            let ratio_v, ratio_ok = json::as_f64(json::member(flds, "ratio"));
+            assert(ratio_ok && ratio_v == 1.5);
+            let ok_v, ok_flag = json::as_bool(json::member(flds, "ok"));
+            assert(ok_flag && ok_v);
+            let meta_n = json::member(flds, "meta");
+            let bk_s, bk_ok = json::as_string(json::member(meta_n, "backend"));
+            assert(bk_ok && bk_s == "software");
+            let raw_n = json::member(flds, "raw");
+            let rk_v, rk_ok = json::as_i64(json::member(raw_n, "k"));
+            assert(rk_ok && rk_v == 1);
+        }
+        line_idx += 1;
+    };
+    assert(r_ok && r_cnt == 9);
+
+    // 4. Reopen aliasing safety, append vs overwrite, and runtime path switching
+    assert(app.log_open(app.log_path(), goose_ui::LogOptions { append: true }));
+    assert(app.log_info("appended line"));
+    assert(count_lines_and_validate_json(path_jsonl) == 10);
+
+    assert(app.log_open(path_jsonl, goose_ui::LogOptions { append: false }));
+    assert(app.log_info("overwritten line"));
+    assert(count_lines_and_validate_json(path_jsonl) == 1);
+
+    assert(app.log_open(path_switch, goose_ui::LogOptions { append: false }));
+    assert(app.log_path() == path_switch);
+    assert(app.log_info("switched file"));
+    app.log_close();
+    assert(!app.log_is_open());
+    assert(app.log_open(path_switch));
+    assert(app.log_info("default append"));
+    app.log_close();
+    assert(count_lines_and_validate_json(path_switch) == 2);
+
+    // 5. LogFormat.JsonArray (empty, multi-entry, and reopen append)
+    assert(app.log_open(path_arr, goose_ui::LogOptions {
+        format: goose_ui::LogFormat.JsonArray,
+        append: false,
+    }));
+    var arr_buf: u8[>..] = [];
+    assert(win32::read_file_bytes(path_arr, arr_buf));
+    var arr_doc0: json::Node[>..] = [];
+    var arr_dec0: u8[>..] = [];
+    let arr_root0, _e0 = json::parse(arr_buf, arr_doc0, arr_dec0);
+    assert(arr_root0 != null);
+    match arr_root0.val {
+        Arr a => { assert(a.count == 0); },
+        _ => { assert(false); },
+    }
+
+    assert(app.log_info("arr1", "first"));
+    assert(app.log_warn_with("arr2", "second") { f => f.int("n", 2); });
+    app.log_close();
+
+    // Reopen existing JsonArray with append = true
+    assert(app.log_open(path_arr, goose_ui::LogOptions {
+        format: goose_ui::LogFormat.JsonArray,
+        append: true,
+    }));
+    assert(app.log_error("arr3", "third"));
+    app.log_close();
+
+    arr_buf.clear();
+    assert(win32::read_file_bytes(path_arr, arr_buf));
+    var arr_doc1: json::Node[>..] = [];
+    var arr_dec1: u8[>..] = [];
+    let arr_root1, _e1 = json::parse(arr_buf, arr_doc1, arr_dec1);
+    assert(arr_root1 != null);
+    match arr_root1.val {
+        Arr a => { assert(a.count == 3); },
+        _ => { assert(false); },
+    }
+    let arr_cnt, arr_ok = goose_ui::each_json_log_entry(path_arr) { e =>
+        assert(e.msg == "first" || e.msg == "second" || e.msg == "third");
+    };
+    assert(arr_ok && arr_cnt == 3);
+
+    // 6. Size-based file rotation
+    assert(app.log_open(path_rot, goose_ui::LogOptions {
+        append: false,
+        max_file_bytes: 240,
+        max_backups: 2,
+    }));
+    for i: i32 in 0..10 {
+        assert(app.log_info("rot", str("rotation entry number ", i, " payload")));
+    }
+    app.log_close();
+    assert(win32::file_exists(path_rot));
+    assert(win32::file_exists(str(path_rot, ".1")));
+    assert(win32::file_exists(str(path_rot, ".2")));
+    assert(!win32::file_exists(str(path_rot, ".3")));
+    assert(count_lines_and_validate_json(path_rot) > 0);
+    assert(count_lines_and_validate_json(str(path_rot, ".1")) > 0);
+    assert(count_lines_and_validate_json(str(path_rot, ".2")) > 0);
+
+    // 7. Standalone JsonLogger (utc=true, include_process_info=false)
+    var jl = goose_ui::JsonLogger { .. };
+    assert(jl.open(path_standalone, goose_ui::LogOptions {
+        min_level: goose_ui::LogLevel.Trace,
+        append: false,
+        utc: true,
+        include_process_info: false,
+    }));
+    assert(jl.is_open() && jl.log_path() == path_standalone);
+    jl.set_stderr(false);
+    jl.set_auto_flush(true);
+    jl.set_level(goose_ui::LogLevel.Trace);
+    assert(goose_ui::log_level_name(jl.level()) == "trace");
+    assert(jl.trace("t"));
+    assert(jl.debug("d"));
+    assert(jl.info("tag", "i"));
+    assert(jl.warn("w"));
+    assert(jl.error("e"));
+    assert(jl.fatal("f"));
+    assert(jl.info_with("tag", "iw") { f => f.int("x", 1); });
+    assert(jl.write(goose_ui::LogLevel.Warn, "wt", "wm"));
+    assert(jl.write_with(goose_ui::LogLevel.Error, "et", "em") { f => f.flag("b", true); });
+    assert(jl.flush());
+    assert(jl.entry_count() == 9);
+    assert(jl.bytes_written() > 0);
+    jl.close();
+    assert(!jl.is_open());
+
+    var checked_utc = false;
+    let jl_cnt, jl_ok = goose_ui::each_json_log_entry(path_standalone) { e =>
+        if !checked_utc {
+            assert(e.ts.len > 0 && e.ts[e.ts.len - 1] == 'Z');
+            var doc: json::Node[>..] = [];
+            var decoded: u8[>..] = [];
+            let root, _err = json::parse(e.raw_json, doc, decoded);
+            assert(root != null);
+            assert(json::member(root, "pid") == null);
+            assert(json::member(root, "tid") == null);
+            checked_utc = true;
+        }
+    };
+    assert(jl_ok && jl_cnt == 9 && checked_utc);
+
+    // 8. Automatic UI event logging (log_ui_events=true) & destroy_all() auto-close
+    var ui_app = goose_ui::App { .. };
+    assert(ui_app.log_open(path_ui, goose_ui::LogOptions {
+        min_level: goose_ui::LogLevel.Debug,
+        append: false,
+        log_ui_events: true,
+    }));
+    ui_app.log_set_stderr(false);
+    ui_app.log_set_auto_flush(true);
+    ui_app.log_set_ui_events(true);
+
+    let win = ui_app.create_headless_window("LogUITest", 400, 300);
+    let root = ui_app.root(win);
+    let btn = ui_app.add_button(root, "Save");
+    ui_app.set_name(btn, "save_btn");
+    ui_app.set_tag(btn, 777);
+    ui_app.update_layout(win, true);
+
+    let rbtn = ui_app.widget_rect(btn);
+    ui_app.inject_click(win, rbtn.x + rbtn.w * 0.5, rbtn.y + rbtn.h * 0.5);
+
+    ui_app.destroy_all();
+    assert(!ui_app.log_is_open());
+
+    var saw_clicked = false;
+    let ui_cnt, ui_ok = goose_ui::each_json_log_entry(path_ui) { e =>
+        if e.target == "goose_ui.signal" && e.msg == "Clicked" {
+            var doc: json::Node[>..] = [];
+            var decoded: u8[>..] = [];
+            let root_n, _err = json::parse(e.raw_json, doc, decoded);
+            assert(root_n != null);
+            let flds = json::member(root_n, "fields");
+            let wn, wn_ok = json::as_string(json::member(flds, "widget_name"));
+            let aid, aid_ok = json::as_i64(json::member(flds, "action_id"));
+            if wn_ok && wn == "save_btn" && aid_ok && aid == 777 {
+                saw_clicked = true;
+            }
+        }
+    };
+    assert(ui_ok && ui_cnt >= 1 && saw_clicked);
+
+    // 9. Clean up temp test files and directories
+    win32::delete_file(path_jsonl);
+    win32::delete_file(path_switch);
+    win32::delete_file(path_arr);
+    win32::delete_file(path_rot);
+    win32::delete_file(str(path_rot, ".1"));
+    win32::delete_file(str(path_rot, ".2"));
+    win32::delete_file(path_standalone);
+    win32::delete_file(path_ui);
+    win32::remove_directory(utf8_dir);
+    win32::remove_directory(nested_dir);
+    win32::remove_directory(base_dir);
+
+    print("[OK] JSON logging (JsonLines, JsonArray, fields, rotation, UI events, reader)");
+}
+
 fn main() {
     test_tree_and_handles();
     test_layouts();
@@ -772,9 +1144,11 @@ fn main() {
     test_combo_list_tabs_focus();
     test_real_win32_d2d_smoke();
     test_software_gdi_and_str_pool();
+    test_opengl_backend_render();
     test_dsl_and_win32_anchors();
     test_regressions_canvas_and_visibility();
     test_regressions_inputs_and_signals();
     test_regressions_layout_and_pools();
+    test_json_logging();
     print("ALL GOOSE_UI TESTS PASSED");
 }

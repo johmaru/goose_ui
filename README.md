@@ -17,6 +17,7 @@ A **zero-heap, dual-backend retained-mode GUI framework** for the [Goose](https:
   - `ComboBox` (floating top-level dropdown overlay), `ListView` (virtualized scrolling, keyboard nav, double-click activation)
   - `Canvas` (custom `QPainter`-style 2D vector & text drawing surface inside any layout, working on both GDI and Direct2D)
 - **Native Windows 11 Integration** — DWM dark titlebar synced with live Dark/Light theme switching, rounded corners, native Win32 MenuBar & Context Menus, Common Dialogs (Open/Save/Folder/Color/Input/MessageBox), Clipboard, `QTimer`-style timers, and Drag & Drop files.
+- **Structured JSON Logging (`log.goose`)** — User-specified output path (auto-creating parent directories), `JsonLines` (NDJSON) and `JsonArray` formats, size-based file rotation, fluent `LogFields`/`LogArray` builders, `App`-integrated & standalone `JsonLogger` APIs, optional automatic `Signal` tracing, and `each_json_log_entry`.
 
 ## Documentation
 
@@ -158,6 +159,7 @@ pwsh -File bench/run_bench.ps1
 - `theme.goose` — Dark & Light themes, compact packed `WidgetStyle`, UTF-8 text width metrics
 - `widget.goose` — Retained `Widget`, `ListItem`, `Window`, `TimerInfo`, and `root struct App` (with `str_pool`)
 - `tree.goose` — Window & widget lifecycle, string pool, GDI/D2D font caches, constructors, property getters/setters, Win32-style ID lookups, `connect`
+- `log.goose` — Structured JSON logging (`JsonLines` / `JsonArray`, rotation, `LogFields`, `JsonLogger`, `App` integration, `each_json_log_entry`)
 - `layout.goose` — Two-pass Qt-style layout engine (`measure_widget` / `layout_widget`) + `Anchor` absolute positioning
 - `painter.goose` — Dual-backend `Painter` (Software GDI + ClearType & Direct2D + DirectWrite), widget renderers, overlays & tooltips
 - `events.goose` — Hit testing, focus traversal, LineEdit/Slider/Splitter/List/Tab interaction, event loop, synthetic test injection

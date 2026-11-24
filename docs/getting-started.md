@@ -122,6 +122,25 @@ goose build examples/counter.goose
 
 ---
 
+## 6. Optional Structured JSON Logging
+
+Configure a user-chosen output path on `app` (or a standalone `goose_ui::JsonLogger`) to write structured JSON logs (`JsonLines` or `JsonArray`):
+
+```goose
+app.log_open("C:/Users/you/AppData/Local/MyApp/logs/app.jsonl", goose_ui::LogOptions {
+    min_level: goose_ui::LogLevel.Info,
+    max_file_bytes: 1024 * 1024,
+    max_backups: 3,
+});
+app.log_info_with("startup", "Window created") { f =>
+    f.window_id("win", win);
+};
+```
+
+See [Widgets, Events & Native API](widgets-and-events.md#7-structured-json-logging-loggoose) for full details.
+
+---
+
 ## Next Steps
 
 - [UI DSL & Layout Guide](dsl-and-layout.md) — Scoped nested DSL, all layout containers, and `Anchor` absolute placement

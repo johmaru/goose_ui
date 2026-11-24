@@ -8,12 +8,16 @@ import types;
 import theme;
 import widget;
 import tree;
+import log;
 import layout;
 import painter;
 
 // --- Signal Queue & Declarative Connection Execution ------------------------
 
 fn push_signal(app: App&, sig: Signal) {
+    if app.log.ui_events && (app.log.file.is_valid() || app.log.also_stderr) {
+        app.log_signal(sig);
+    }
     app.signals.push(sig);
 }
 
@@ -1223,6 +1227,8 @@ fn dispatch_win32_event(app: App&, ev: const win32::Event&) {
             app.windows[win.index].height = ev.height;
             if app.windows[win.index].d2d.is_valid() {
                 app.windows[win.index].d2d.resize(ev.width, ev.height);
+            } else if app.windows[win.index].gl2d.is_valid() {
+                app.windows[win.index].gl2d.resize(ev.width, ev.height);
             }
             app.windows[win.index].layout_dirty = true;
             app.windows[win.index].dirty = true;

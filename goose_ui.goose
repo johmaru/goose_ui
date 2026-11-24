@@ -8,6 +8,7 @@ import types;
 import theme;
 import widget;
 import tree;
+import log;
 import layout;
 import painter;
 import events;

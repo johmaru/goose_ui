@@ -136,6 +136,16 @@ struct GdiFontSet {
     mono: win32::Hfont = win32::Hfont {},
 }
 
+// Font cache for OpenGL 3.3 backend (uploaded into GPU VRAM GL_R8 atlas).
+struct Gl2dFontSet {
+    body: win32::Gl2dFont = win32::Gl2dFont {},
+    body_bold: win32::Gl2dFont = win32::Gl2dFont {},
+    heading: win32::Gl2dFont = win32::Gl2dFont {},
+    subheading: win32::Gl2dFont = win32::Gl2dFont {},
+    caption: win32::Gl2dFont = win32::Gl2dFont {},
+    mono: win32::Gl2dFont = win32::Gl2dFont {},
+}
+
 // Top-level Window state.
 struct Window {
     alive: bool = false,
@@ -144,8 +154,10 @@ struct Window {
     backend: RenderBackend = RenderBackend.Direct2D,
     hwnd: win32::Hwnd = win32::Hwnd {},
     d2d: win32::D2dTarget = win32::D2dTarget {},
+    gl2d: win32::Gl2dTarget = win32::Gl2dTarget {},
     fonts: FontSet = FontSet {},
     gdi_fonts: GdiFontSet = GdiFontSet {},
+    gl2d_fonts: Gl2dFontSet = Gl2dFontSet {},
     menu_bar: win32::Hmenu = win32::Hmenu {},
 
     title: StrSpan = StrSpan {},
@@ -218,4 +230,6 @@ root struct App {
     signals: Signal[>..] = [],
     signal_head: i64 = 0,
     focus_order: WidgetId[>..<] = [],
+    log: LogState = LogState {},
+    log_path_span: StrSpan = StrSpan {},
 }

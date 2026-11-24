@@ -18,7 +18,9 @@ root struct App
  ├── connections:  Connection[>..]  // Declarative Signal -> Slot table
  ├── timers:       TimerInfo[>..]   // Active timers
  ├── signals:      Signal[>..]      // Per-frame signal queue
- └── focus_order:  WidgetId[>..<]   // Cached Tab traversal order
+ ├── focus_order:  WidgetId[>..<]   // Cached Tab traversal order
+ ├── log:           LogState         // Optional user-path JSON logger state
+ └── log_path_span: StrSpan          // Pooled path in App.str_pool (0 bytes when unused)
 ```
 
 ### Generational Handles (`WindowId`, `WidgetId`)
@@ -100,6 +102,7 @@ goose_ui.goose (public entry point)
  ├── theme.goose    (Theme, packed WidgetStyle, UTF-8 text metrics)
  ├── widget.goose   (Widget, Window, ListItem, TimerInfo, root struct App)
  ├── tree.goose     (lifecycle, str_pool, font caches, add_*/set_*, connect)
+ ├── log.goose      (structured JSON logging, rotation, JsonLogger, log reader)
  ├── layout.goose   (two-pass layout engine & Anchor absolute positioning)
  ├── painter.goose  (Software GDI / Direct2D dual painter & widget renderers)
  ├── events.goose   (hit testing, focus, input editing, event loop, inject_*)

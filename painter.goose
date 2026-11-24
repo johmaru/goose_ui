@@ -26,6 +26,8 @@ struct Painter {
     backend: RenderBackend = RenderBackend.Direct2D,
     d2d: win32::D2dTarget = win32::D2dTarget {},
     fonts: FontSet = FontSet {},
+    gl2d: win32::Gl2dTarget = win32::Gl2dTarget {},
+    gl2d_fonts: Gl2dFontSet = Gl2dFontSet {},
     hdc: win32::Hdc = win32::Hdc {},
     gdi_fonts: GdiFontSet = GdiFontSet {},
     ox: f32 = 0.0,
@@ -73,6 +75,33 @@ fn align_to_d2d_v(a: Align) -> i32 {
     };
 }
 
+fn select_gl2d_font(fonts: const Gl2dFontSet&, role: FontRole) -> win32::Gl2dFont {
+    return match role {
+        Body => fonts.body,
+        BodyBold => fonts.body_bold,
+        Heading => fonts.heading,
+        Subheading => fonts.subheading,
+        Caption => fonts.caption,
+        Mono => fonts.mono,
+    };
+}
+
+fn align_to_gl2d_h(a: Align) -> i32 {
+    return match a {
+        Start, Stretch => win32::GL2D_ALIGN_START,
+        Center => win32::GL2D_ALIGN_CENTER,
+        End => win32::GL2D_ALIGN_END,
+    };
+}
+
+fn align_to_gl2d_v(a: Align) -> i32 {
+    return match a {
+        Start => win32::GL2D_ALIGN_START,
+        Center, Stretch => win32::GL2D_ALIGN_CENTER,
+        End => win32::GL2D_ALIGN_END,
+    };
+}
+
 // Composite translucent colors onto the theme surface for GDI software rendering.
 fn gdi_colorref(p: const Painter&, c: Color) -> u32 {
     if c.a >= 0.99 { return to_colorref(c); }
@@ -100,6 +129,9 @@ fn fill_rect(p: const Painter&, x: f32, y: f32, w: f32, h: f32, c: Color) {
             };
             p.hdc.fill_rect(rc, gdi_colorref(p, c));
         },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.fill_rect(p.ox + x, p.oy + y, w, h, to_d2d(c)); }
+        },
     }
 }
 
@@ -120,6 +152,9 @@ fn draw_rect(p: const Painter&, x: f32, y: f32, w: f32, h: f32, c: Color, stroke
             p.hdc.select_object(old_b);
             p.hdc.select_object(old_p);
             pen.delete();
+        },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.draw_rect(p.ox + x, p.oy + y, w, h, to_d2d(c), stroke); }
         },
     }
 }
@@ -143,6 +178,9 @@ fn fill_rounded_rect(p: const Painter&, x: f32, y: f32, w: f32, h: f32, r: f32, 
             p.hdc.select_object(old_b);
             brush.delete();
         },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.fill_rounded_rect(p.ox + x, p.oy + y, w, h, r, to_d2d(c)); }
+        },
     }
 }
 
@@ -165,6 +203,9 @@ fn draw_rounded_rect(p: const Painter&, x: f32, y: f32, w: f32, h: f32, r: f32, 
             p.hdc.select_object(old_p);
             pen.delete();
         },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.draw_rounded_rect(p.ox + x, p.oy + y, w, h, r, to_d2d(c), stroke); }
+        },
     }
 }
 
@@ -184,6 +225,9 @@ fn fill_ellipse(p: const Painter&, cx: f32, cy: f32, rx: f32, ry: f32, c: Color)
             p.hdc.select_object(old_p);
             p.hdc.select_object(old_b);
             brush.delete();
+        },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.fill_ellipse(p.ox + cx, p.oy + cy, rx, ry, to_d2d(c)); }
         },
     }
 }
@@ -206,6 +250,9 @@ fn draw_ellipse(p: const Painter&, cx: f32, cy: f32, rx: f32, ry: f32, c: Color,
             p.hdc.select_object(old_p);
             pen.delete();
         },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.draw_ellipse(p.ox + cx, p.oy + cy, rx, ry, to_d2d(c), stroke); }
+        },
     }
 }
 
@@ -225,6 +272,9 @@ fn draw_line(p: const Painter&, x0: f32, y0: f32, x1: f32, y1: f32, c: Color, st
             p.hdc.line_to(round_i32(p.ox + x1), round_i32(p.oy + y1));
             p.hdc.select_object(old_p);
             pen.delete();
+        },
+        OpenGL => {
+            if p.gl2d.is_valid() { p.gl2d.draw_line(p.ox + x0, p.oy + y0, p.ox + x1, p.oy + y1, to_d2d(c), stroke); }
         },
     }
 }
@@ -275,6 +325,12 @@ fn draw_text(
             };
             p.hdc.draw_text(text, rc, fmt);
             if old_f != 0 { p.hdc.select_object(old_f); }
+        },
+        OpenGL => {
+            guard p.gl2d.is_valid() else { return; }
+            let f = select_gl2d_font(p.gl2d_fonts, role);
+            guard f.is_valid() else { return; }
+            p.gl2d.draw_text(text, f, p.ox + x, p.oy + y, w, h, align_to_gl2d_h(h_align), align_to_gl2d_v(v_align), to_d2d(c));
         },
     }
 }
@@ -747,7 +803,9 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             let top_y = r.y + 4.0;
             let bot_y = r.y + r.h - 4.0;
 
-            let is_sw = match p.backend { Software => true, Direct2D => false };
+            let is_sw = match p.backend { Software => true, _ => false };
+            let is_gl = match p.backend { OpenGL => true, _ => false };
+            let has_clip = is_sw || is_gl;
             var saved_dc: i32 = 0;
             if is_sw && p.hdc.is_valid() {
                 saved_dc = SaveDC(p.hdc.raw);
@@ -758,13 +816,15 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
                     round_i32(p.ox + r.x + r.w - 2.0),
                     round_i32(p.oy + bot_y)
                 );
+            } else if is_gl {
+                p.gl2d.push_clip(p.ox + r.x + 2.0, p.oy + top_y, if r.w > 4.0 { r.w - 4.0 } else { 0.0 }, if bot_y > top_y { bot_y - top_y } else { 0.0 });
             }
 
             var idx: i32 = 0;
             for i in app.list_items.len {
                 if app.list_items[i].alive && eq(app.list_items[i].owner, id) {
                     let iy = top_y + idx * ih - w.scroll_y;
-                    let visible_row = if is_sw {
+                    let visible_row = if has_clip {
                         iy + ih > top_y && iy < bot_y
                     } else {
                         (iy >= top_y - 1.0 && iy + ih <= bot_y + 1.0) || (ih > bot_y - top_y && iy + ih > top_y && iy < bot_y)
@@ -794,6 +854,8 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
 
             if saved_dc != 0 {
                 RestoreDC(p.hdc.raw, saved_dc);
+            } else if is_gl {
+                p.gl2d.pop_clip();
             }
 
             if w.scroll_max_y > 0.0 {
@@ -881,13 +943,16 @@ struct PaintFrame {
     clip: RectF = RectF {},
     in_scroll: bool = false,
     saved_dc: i32 = 0,
+    gl_clip: bool = false,
     exit_phase: bool = false,
 }
 
 fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: WidgetId, p: const Painter&, full_clip: RectF) {
-    let is_sw = match p.backend { Software => true, Direct2D => false };
+    let is_sw = match p.backend { Software => true, _ => false };
+    let is_gl = match p.backend { OpenGL => true, _ => false };
+    let has_hw_clip = is_sw || is_gl;
     var stack: PaintFrame[>..<] = [];
-    stack.push(PaintFrame { id: root_id, clip: full_clip, in_scroll: false, saved_dc: 0, exit_phase: false });
+    stack.push(PaintFrame { id: root_id, clip: full_clip, in_scroll: false, saved_dc: 0, gl_clip: false, exit_phase: false });
 
     while stack.len > 0 {
         let fr = stack.pop();
@@ -895,6 +960,8 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
         if fr.exit_phase {
             if fr.saved_dc != 0 && p.hdc.is_valid() {
                 RestoreDC(p.hdc.raw, fr.saved_dc);
+            } else if fr.gl_clip {
+                p.gl2d.pop_clip();
             }
             if app.valid_widget(id) {
                 match app.widgets[id.index].kind {
@@ -930,7 +997,7 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
 
         // On Direct2D (no hardware clip rect in win32-goose), skip leaf widgets that would bleed
         // outside a ScrollArea unless the single leaf itself is taller than the viewport.
-        let draw_self = if !is_sw && fr.in_scroll && !has_children {
+        let draw_self = if !has_hw_clip && fr.in_scroll && !has_children {
             (r.y >= clip.y - 2.0 && r.y + r.h <= clip.y + clip.h + 2.0) || r.h > clip.h
         } else {
             true
@@ -970,6 +1037,13 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
                                     RestoreDC(p.hdc.raw, csave);
                                 }
                             },
+                            OpenGL => {
+                                p.gl2d.push_clip(p.ox + r.x, p.oy + r.y, r.w, r.h);
+                                cp.ox = p.ox + r.x;
+                                cp.oy = p.oy + r.y;
+                                OnCanvas(id, cp);
+                                p.gl2d.pop_clip();
+                            },
                         }
                     }
                 },
@@ -981,6 +1055,7 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
         let child_in_scroll = fr.in_scroll || is_scroll;
 
         var saved_dc: i32 = 0;
+        var gl_clip = false;
         if is_scroll && is_sw && p.hdc.is_valid() {
             saved_dc = SaveDC(p.hdc.raw);
             IntersectClipRect(
@@ -990,10 +1065,15 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
                 round_i32(p.ox + next_clip.x + next_clip.w - 1.0),
                 round_i32(p.oy + next_clip.y + next_clip.h - 1.0)
             );
+        } else if is_scroll && is_gl {
+            let cw = if next_clip.w > 2.0 { next_clip.w - 2.0 } else { 0.0 };
+            let ch_h = if next_clip.h > 2.0 { next_clip.h - 2.0 } else { 0.0 };
+            p.gl2d.push_clip(p.ox + next_clip.x + 1.0, p.oy + next_clip.y + 1.0, cw, ch_h);
+            gl_clip = true;
         }
 
-        if is_scroll || saved_dc != 0 {
-            stack.push(PaintFrame { id: id, clip: next_clip, in_scroll: child_in_scroll, saved_dc: saved_dc, exit_phase: true });
+        if is_scroll || saved_dc != 0 || gl_clip {
+            stack.push(PaintFrame { id: id, clip: next_clip, in_scroll: child_in_scroll, saved_dc: saved_dc, gl_clip: gl_clip, exit_phase: true });
         }
 
         // Push children in reverse order so first_child is popped and painted first.
@@ -1001,7 +1081,7 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
         while app.valid_widget(ch) {
             let cr = app.widgets[ch.index].rect;
             if cr.w > 0.0 && cr.h > 0.0 && cr.y + cr.h > next_clip.y && cr.y < next_clip.y + next_clip.h {
-                stack.push(PaintFrame { id: ch, clip: next_clip, in_scroll: child_in_scroll, saved_dc: 0, exit_phase: false });
+                stack.push(PaintFrame { id: ch, clip: next_clip, in_scroll: child_in_scroll, saved_dc: 0, gl_clip: false, exit_phase: false });
             }
             ch = app.widgets[ch.index].prev_sibling;
         }
@@ -1105,6 +1185,8 @@ fn render_window_with<OnCanvas>(app: App&, win: WindowId) {
         backend: backend,
         d2d: app.windows[win.index].d2d,
         fonts: app.windows[win.index].fonts,
+        gl2d: app.windows[win.index].gl2d,
+        gl2d_fonts: app.windows[win.index].gl2d_fonts,
         gdi_fonts: app.windows[win.index].gdi_fonts,
         theme: app.theme,
         width: ww,
@@ -1125,6 +1207,10 @@ fn render_window_with<OnCanvas>(app: App&, win: WindowId) {
             p.hdc = dc;
             dc.fill_rect(paint_rc, to_colorref(app.theme.window_bg));
         },
+        OpenGL => {
+            guard p.gl2d.is_valid() else { return; }
+            p.gl2d.begin_draw(to_d2d(app.theme.window_bg));
+        },
     }
 
     let root_id = app.windows[win.index].root_widget;
@@ -1142,6 +1228,7 @@ fn render_window_with<OnCanvas>(app: App&, win: WindowId) {
     match backend {
         Direct2D => { p.d2d.end_draw(); },
         Software => { app.windows[win.index].hwnd.end_paint(); },
+        OpenGL => { p.gl2d.end_draw(); },
     }
     app.windows[win.index].dirty = false;
 }

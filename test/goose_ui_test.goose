@@ -1137,6 +1137,460 @@ fn test_json_logging() {
     print("[OK] JSON logging (JsonLines, JsonArray, fields, rotation, UI events, reader)");
 }
 
+fn test_i18n() {
+    let sys_loc = goose_ui::system_locale();
+    let sys_lang = goose_ui::system_language();
+    assert(sys_loc.len > 0 && sys_lang.len > 0);
+
+    let tmp = win32::temp_dir();
+    let sep = if tmp.len > 0 && (tmp[tmp.len - 1] == '\\' || tmp[tmp.len - 1] == '/') { "" } else { "\\" };
+    let base_dir = str(tmp, sep, "goose_ui_i18n_test_", win32::GetCurrentProcessId());
+    let locales_dir = str(base_dir, "\\locales");
+    let en_path = str(locales_dir, "\\en.json");
+    let fr_path = str(locales_dir, "\\fr.json");
+    let bundle_path = str(base_dir, "\\bundle.json");
+    let log_path = str(base_dir, "\\i18n_events.jsonl");
+    assert(goose_ui::ensure_parent_dirs(str(locales_dir, "\\_")));
+
+    var app = goose_ui::App { .. };
+    assert(app.log_open(log_path, goose_ui::LogOptions {
+        min_level: goose_ui::LogLevel.Debug,
+        append: false,
+        log_ui_events: true,
+    }));
+
+    // 1. Locale registration, BCP-47 normalization, and hierarchical fallback
+    let idx_en = app.i18n_register_locale("EN", "English");
+    let idx_ja = app.i18n_register_locale("ja", "日本語");
+    let idx_ja_jp = app.i18n_register_locale("ja_jp", "日本語 (日本)");
+    assert(idx_en == 0 && idx_ja == 1 && idx_ja_jp == 2);
+    assert(app.locale_code(idx_ja_jp) == "ja-JP");
+    assert(app.locale_name_at(idx_ja_jp) == "日本語 (日本)");
+    assert(app.set_fallback_locale("en"));
+    assert(app.fallback_locale() == "en");
+
+    assert(app.i18n_add("en", "only.en", "English Fallback"));
+    assert(app.i18n_add("ja", "shared.ja", "親日本語"));
+    assert(app.i18n_add("ja-JP", "regional.jp", "地域設定"));
+    assert(app.set_locale("ja-JP"));
+    assert(app.locale() == "ja-JP");
+    assert(app.tr("regional.jp") == "地域設定");
+    assert(app.tr("shared.ja") == "親日本語");          // ja-JP -> ja parent fallback
+    assert(app.tr("only.en") == "English Fallback"); // ja-JP -> ja -> en fallback
+    assert(app.tr("missing.key") == "missing.key");
+    assert(app.tr_or("missing.key", "Default") == "Default");
+    assert(!app.has_tr("missing.key") && app.has_tr("shared.ja"));
+
+    // 2. Flat & nested JSON, metadata, bundle JSON, external file & dir loading
+    assert(app.i18n_load_json_str("en", """
+        {
+          "_locale_name": "English (US)",
+          "win": { "title": "App EN" },
+          "status": { "ready": "Ready" },
+          "ui": {
+            "hello": "Hello",
+            "btn": "OK",
+            "chk": "Accept",
+            "tog": "Dark Mode",
+            "grp": "Group",
+            "ph": "Search...",
+            "tip": "Tooltip EN",
+            "tab1": "Tab One",
+            "tab2": "Tab Two",
+            "item_a": "Alpha",
+            "item_b": "Beta",
+            "sub_b": "Sub B"
+          },
+          "fmt": {
+            "pos": "{0} + {1} = {2}",
+            "named": "{user} launched {game} ({fps} fps, #{num}) {{literal}}"
+          },
+          "meta_num": 42,
+          "meta_flag": true
+        }
+    """));
+    assert(app.locale_name_at(idx_en) == "English (US)");
+    assert(app.tr_for("en", "ui.hello") == "Hello");
+    assert(app.tr_for("en", "meta_num") == "42");
+    assert(app.tr_for("en", "meta_flag") == "true");
+
+    assert(app.i18n_load_json_str("ja", """
+        {
+          "_meta": { "name": "日本語" },
+          "win": { "title": "アプリ JP" },
+          "status": { "ready": "準備完了" },
+          "ui": {
+            "hello": "こんにちは世界",
+            "btn": "確定する",
+            "chk": "同意する",
+            "tog": "ダークモード",
+            "grp": "グループ",
+            "ph": "検索してください...",
+            "tip": "ツールチップ JP",
+            "tab1": "タブ1",
+            "tab2": "タブ2番目",
+            "item_a": "アルファ",
+            "item_b": "ベータ",
+            "sub_b": "サブB"
+          },
+          "fmt": {
+            "named": "{game} を {user} が起動 (#{num}, {fps} fps) {{literal}}"
+          }
+        }
+    """));
+
+    assert(win32::write_file_bytes(bundle_path, """
+        {
+          "en": { "bundle": { "k": "From Bundle EN" } },
+          "ja": { "bundle": { "k": "バンドル JP" } }
+        }
+    """));
+    assert(app.i18n_load_bundle_json_file(bundle_path));
+    assert(app.tr_for("ja", "bundle.k") == "バンドル JP");
+
+    assert(win32::write_file_bytes(en_path, "{\"ui\":{\"hello\":\"Hello Override\"}}"));
+    assert(win32::write_file_bytes(fr_path, "{\"_locale_name\":\"Français\",\"ui\":{\"hello\":\"Bonjour\"}}"));
+    assert(app.i18n_load_dir(locales_dir) == 2);
+    assert(app.has_locale("fr"));
+    assert(app.tr_for("en", "ui.hello") == "Hello Override");
+    assert(app.tr_for("fr", "ui.hello") == "Bonjour");
+    assert(app.tr_for("fr", "ui.btn") == "OK"); // fallback to en
+
+    // 3. Positional & named template formatting
+    assert(app.set_locale("en"));
+    assert(app.tr3("fmt.pos", "1", "2", "3") == "1 + 2 = 3");
+    let fmt_en = app.tr_fmt("fmt.named") { f =>
+        f.text("user", "Yu").text("game", "Goose").num("fps", 144.5, 1).int("num", 7);
+    };
+    assert(fmt_en == "Yu launched Goose (144.5 fps, #7) {literal}");
+
+    assert(app.set_locale("ja"));
+    let fmt_ja = app.tr_fmt("fmt.named") { f =>
+        f.text("user", "Yu").text("game", "Goose").num("fps", 144.5, 1).int("num", 7);
+    };
+    assert(fmt_ja == "Goose を Yu が起動 (#7, 144.5 fps) {literal}");
+
+    // 4. Live UI re-translation, layout recalculation, item compaction & detaching
+    var win = app.create_headless_window("", 720, 480);
+    app.set_tr_window_title(win, "win.title");
+    app.set_tr_status_text(win, "status.ready");
+
+    var w_lbl = goose_ui::WIDGET_NONE;
+    var w_btn = goose_ui::WIDGET_NONE;
+    var w_chk = goose_ui::WIDGET_NONE;
+    var w_tog = goose_ui::WIDGET_NONE;
+    var w_grp = goose_ui::WIDGET_NONE;
+    var w_ed = goose_ui::WIDGET_NONE;
+    var w_cb = goose_ui::WIDGET_NONE;
+    var w_lv = goose_ui::WIDGET_NONE;
+    var w_tabs = goose_ui::WIDGET_NONE;
+    var w_manual = goose_ui::WIDGET_NONE;
+    var w_temp = goose_ui::WIDGET_NONE;
+
+    assert(app.set_locale("en"));
+    app.ui(win) { u =>
+        u.padding(12.0).spacing(8.0);
+        u.tr_label("ui.hello").bind(w_lbl);
+        u.tr_button("ui.btn").align(goose_ui::Align.Start).tr_tooltip("ui.tip").bind(w_btn);
+        u.tr_checkbox("ui.chk", true).bind(w_chk);
+        u.tr_toggle("ui.tog", false).bind(w_tog);
+        u.tr_group_box("ui.grp") { g =>
+            g.self_node().bind(w_grp);
+            g.tr_line_edit("ui.ph").bind(w_ed);
+            g.tr_label("ui.hello").bind(w_temp);
+        };
+        u.combo_box()
+            .tr_item("ui.item_a")
+            .tr_item("ui.item_b")
+            .bind(w_cb);
+        u.list_view(30.0)
+            .tr_item("ui.item_a")
+            .tr_item("ui.item_b", "ui.sub_b")
+            .bind(w_lv);
+        u.tabs() { t =>
+            t.self_node().bind(w_tabs);
+            t.tr_tab("ui.tab1") { _p => };
+            t.tr_tab("ui.tab2") { _p => };
+        };
+        u.tr_label("ui.hello").bind(w_manual);
+    };
+
+    app.update_layout(win, true);
+    let btn_w_en = app.widget_rect(w_btn).w;
+    assert(app.str_view(app.windows[win.index].title) == "App EN");
+    assert(app.text(app.windows[win.index].status_bar) == "Ready");
+    assert(app.text(w_lbl) == "Hello Override");
+    assert(app.text(w_btn) == "OK");
+    assert(app.str_view(app.widgets[w_btn.index].tooltip) == "Tooltip EN");
+    assert(app.str_view(app.widgets[w_ed.index].placeholder) == "Search...");
+    assert(app.item_text(w_cb, 0) == "Alpha" && app.item_text(w_cb, 1) == "Beta");
+    assert(app.item_text(w_lv, 1) == "Beta" && app.item_subtext(w_lv, 1) == "Sub B");
+    assert(app.item_text(w_tabs, 0) == "Tab One" && app.item_text(w_tabs, 1) == "Tab Two");
+
+    // Remove item 0 from ListView (compacts/shifts index 1 -> 0) and manually overwrite w_manual
+    assert(app.remove_item(w_lv, 0));
+    app.set_text(w_manual, "Custom Manual Text");
+    app.destroy_widget(w_temp);
+
+    // Drain prior signals before switching locale
+    var sig = goose_ui::Signal.None;
+    while app.next_signal(sig) {}
+
+    // Switch to Japanese -> all remaining bound widgets auto-retranslate & layout grows
+    assert(app.set_locale("ja"));
+    app.update_layout(win, true);
+    let btn_w_ja = app.widget_rect(w_btn).w;
+    assert(btn_w_ja > btn_w_en);
+    assert(app.str_view(app.windows[win.index].title) == "アプリ JP");
+    assert(app.text(app.windows[win.index].status_bar) == "準備完了");
+    assert(app.text(w_lbl) == "こんにちは世界");
+    assert(app.text(w_btn) == "確定する");
+    assert(app.text(w_chk) == "同意する");
+    assert(app.text(w_tog) == "ダークモード");
+    assert(app.text(w_grp) == "グループ");
+    assert(app.str_view(app.widgets[w_ed.index].placeholder) == "検索してください...");
+    assert(app.str_view(app.widgets[w_btn.index].tooltip) == "ツールチップ JP");
+    assert(app.item_text(w_cb, 0) == "アルファ" && app.item_text(w_cb, 1) == "ベータ");
+    assert(app.item_text(w_lv, 0) == "ベータ" && app.item_subtext(w_lv, 0) == "サブB");
+    assert(app.item_text(w_tabs, 0) == "タブ1" && app.item_text(w_tabs, 1) == "タブ2番目");
+    assert(app.text(w_manual) == "Custom Manual Text"); // Detached by manual set_text
+
+    var saw_locale_sig = false;
+    while app.next_signal(sig) {
+        match sig {
+            LocaleChanged lc => {
+                if lc.locale_index == idx_ja { saw_locale_sig = true; }
+            },
+            _ => {},
+        }
+    }
+    assert(saw_locale_sig);
+
+    // 5. Standalone Translator test
+    var tr = goose_ui::Translator { .. };
+    assert(tr.load_dir(locales_dir) == 2);
+    assert(tr.set_locale("fr"));
+    assert(tr.tr("ui.hello") == "Bonjour");
+    assert(tr.set_system_locale("en"));
+    assert(tr.locale().len > 0);
+
+    app.destroy_all();
+
+    var saw_logged_locale = false;
+    let l_cnt, l_ok = goose_ui::each_json_log_entry(log_path) { e =>
+        if e.target == "goose_ui.signal" && e.msg == "LocaleChanged" {
+            var doc: json::Node[>..] = [];
+            var dec: u8[>..] = [];
+            let rn, _er = json::parse(e.raw_json, doc, dec);
+            if rn != null {
+                let flds = json::member(rn, "fields");
+                let lc, lc_ok = json::as_string(json::member(flds, "locale"));
+                if lc_ok && lc == "ja" { saw_logged_locale = true; }
+            }
+        }
+    };
+    assert(l_ok && l_cnt >= 1 && saw_logged_locale);
+
+    win32::delete_file(en_path);
+    win32::delete_file(fr_path);
+    win32::delete_file(bundle_path);
+    win32::delete_file(log_path);
+    win32::remove_directory(locales_dir);
+    win32::remove_directory(base_dir);
+
+    print("[OK] multi-language i18n (JSON/bundle/dir, fallback, interpolation, live re-translation, Translator)");
+}
+
+fn is_win_pos_default(p: goose_ui::WindowPosition) -> bool {
+    return match p { SystemDefault => true, _ => false };
+}
+
+fn is_win_pos_center_primary(p: goose_ui::WindowPosition) -> bool {
+    return match p { CenterPrimary => true, _ => false };
+}
+
+fn is_win_pos_manual(p: goose_ui::WindowPosition) -> bool {
+    return match p { Manual => true, _ => false };
+}
+
+fn test_window_positioning() {
+    // 1. Centering math & clamping
+    let wr_std = win32::Rect { left: 0, top: 0, right: 1920, bottom: 1040 };
+    let cx1, cy1 = goose_ui::compute_centered_pos(wr_std, 800, 600);
+    assert(cx1 == 560 && cy1 == 220);
+
+    let wr_neg = win32::Rect { left: -1920, top: 0, right: 0, bottom: 1040 };
+    let cx2, cy2 = goose_ui::compute_centered_pos(wr_neg, 800, 600);
+    assert(cx2 == -1360 && cy2 == 220);
+
+    let wr_off = win32::Rect { left: 10, top: 40, right: 1930, bottom: 1080 };
+    let cx3, cy3 = goose_ui::compute_centered_pos(wr_off, 2500, 1400);
+    assert(cx3 == 10 && cy3 == 40);
+
+    // 2. Headless startup positioning policies & runtime helpers
+    var app = goose_ui::App { .. };
+    assert(is_win_pos_default(app.window_start_position()));
+
+    app.set_window_start_position(goose_ui::WindowPosition.CenterPrimary);
+    assert(is_win_pos_center_primary(app.window_start_position()));
+    let w_hl = app.create_headless_window("CenterHL", 640, 400);
+    let primary_work = goose_ui::primary_work_area();
+    assert(primary_work.width() > 0 && primary_work.height() > 0);
+    let exp_hx, exp_hy = goose_ui::compute_centered_pos(primary_work, 640, 400);
+    let hlx, hly = app.window_position(w_hl);
+    assert(hlx == exp_hx && hly == exp_hy);
+
+    app.set_window_start_position_manual(120, 80);
+    assert(is_win_pos_manual(app.window_start_position()));
+    let w_man = app.create_headless_window("ManHL", 400, 300);
+    let mx, my = app.window_position(w_man);
+    assert(mx == 120 && my == 80);
+
+    app.center_window(w_man);
+    let exp_mx, exp_my = goose_ui::compute_centered_pos(primary_work, 400, 300);
+    let cmx, cmy = app.window_position(w_man);
+    assert(cmx == exp_mx && cmy == exp_my);
+
+    app.set_window_position(w_man, 33, 44);
+    let sx, sy = app.window_position(w_man);
+    assert(sx == 33 && sy == 44);
+
+    app.set_center_on_primary_display(true);
+    assert(is_win_pos_center_primary(app.window_start_position()));
+    app.set_center_on_primary_display(false);
+    assert(is_win_pos_default(app.window_start_position()));
+    app.destroy_all();
+
+    // 3. Real Win32 (Software, hidden) primary-display centering & runtime move/center
+    var app2 = goose_ui::App { .. };
+    app2.init(true, goose_ui::RenderBackend.Software);
+    app2.set_window_start_position(goose_ui::WindowPosition.CenterPrimary);
+    let w_real = app2.create_window("CenterReal", 520, 360);
+    assert(app2.valid_window(w_real));
+    let wrc = app2.hwnd(w_real).window_rect();
+    let ex, ey = goose_ui::compute_centered_pos(primary_work, wrc.width(), wrc.height());
+    let rx, ry = app2.window_position(w_real);
+    assert(rx >= ex - 2 && rx <= ex + 2 && ry >= ey - 2 && ry <= ey + 2);
+
+    let target_x = primary_work.left + 40;
+    let target_y = primary_work.top + 40;
+    app2.set_window_position(w_real, target_x, target_y);
+    let mx2, my2 = app2.window_position(w_real);
+    assert(mx2 >= target_x - 2 && mx2 <= target_x + 2 && my2 >= target_y - 2 && my2 <= target_y + 2);
+
+    app2.center_window(w_real);
+    let rx2, ry2 = app2.window_position(w_real);
+    assert(rx2 >= ex - 2 && rx2 <= ex + 2 && ry2 >= ey - 2 && ry2 <= ey + 2);
+
+    app2.destroy_all();
+    print("[OK] window startup positioning (CenterPrimary, Manual, compute_centered_pos & Win32 move/center)");
+}
+
+fn test_regressions_text_scroll_and_wrap() {
+    // 1. Headless LineEdit horizontal scroll & nested ListView inside ScrollArea wheel fallthrough
+    var app = goose_ui::App { .. };
+    let win = app.create_headless_window("TextScrollWrapTest", 360, 260);
+    let root = app.root(win);
+    app.set_padding(root, 12.0);
+    app.set_spacing(root, 8.0);
+
+    let sample = "[サンプル] 起動テスト用。右ペインまたは一覧から編集・削除できます。";
+    let ed = app.add_line_edit(root, "Memo", sample);
+    app.set_fixed_width(ed, 240.0);
+
+    let sc = app.add_scroll_area(root);
+    app.set_fixed_height(sc, 140.0);
+    let lv = app.add_list_view(sc, 32.0);
+    app.set_fixed_height(lv, 110.0);
+    app.add_item(lv, "Only One Item");
+    let _tall_pad = app.add_label(sc, "Bottom spacer");
+    app.set_fixed_height(_tall_pad, 140.0);
+
+    app.update_layout(win, true);
+
+    // Focus end of long CJK text -> horizontally scrolls right
+    app.set_focus(win, ed);
+    assert(app.widgets[ed.index].caret == sample.len);
+    assert(app.widgets[ed.index].text_scroll_byte > 0);
+
+    // Home -> scrolls back to 0; End -> scrolls back to scrolled end
+    app.inject_key(win, 0x24, 0); // VK_HOME
+    assert(app.widgets[ed.index].caret == 0 && app.widgets[ed.index].text_scroll_byte == 0);
+    app.inject_key(win, 0x23, 0); // VK_END
+    let scrolled_sb = app.widgets[ed.index].text_scroll_byte;
+    assert(app.widgets[ed.index].caret == sample.len && scrolled_sb > 0);
+
+    // Click inside scrolled LineEdit hits a valid UTF-8 boundary >= scrolled_sb
+    let red = app.widget_rect(ed);
+    app.inject_click(win, red.x + 28.0, red.y + red.h * 0.5);
+    let c_pos = app.widgets[ed.index].caret;
+    assert(c_pos >= app.widgets[ed.index].text_scroll_byte);
+    assert(c_pos == goose_ui::utf8_snap_boundary(sample, c_pos));
+
+    // Wheel over 1-item ListView (scroll_max_y == 0) falls through to outer ScrollArea
+    let rlv = app.widget_rect(lv);
+    assert(app.widgets[lv.index].scroll_max_y == 0.0);
+    assert(app.widgets[sc.index].scroll_max_y > 0.0);
+    app.inject_mouse_wheel(win, rlv.x + 20.0, rlv.y + 20.0, -120);
+    assert(app.widgets[sc.index].scroll_y > 0.0);
+
+    app.destroy_all();
+
+    // 2. Real Win32 Direct2D (hidden) DirectWrite font metrics, wrapped Label, scrolled LineEdit & hardware-clipped ScrollArea/ListView
+    var app2 = goose_ui::App { .. };
+    app2.init(true, goose_ui::RenderBackend.Direct2D);
+    let w2 = app2.create_window("D2DTextAndClip", 520, 340);
+    assert(app2.valid_window(w2));
+    assert(app2.windows[w2.index].metric_dc.raw == 0);
+
+    let measured_w = goose_ui::measure_win_text_width(app2, w2.index, "[サンプル] 起動テスト用。右ペインまたは一", goose_ui::FontRole.Body);
+    assert(measured_w >= 215.0 && measured_w <= 245.0);
+    let measured_mono_w = goose_ui::measure_win_text_width(
+        app2,
+        w2.index,
+        "{\"ts\":\"2026-11-24T20:19:39.708\",\"seq\":2,\"level\":\"info\"}",
+        goose_ui::FontRole.Mono
+    );
+    assert(measured_mono_w >= 395.0 && measured_mono_w <= 420.0);
+    let trail_w = goose_ui::measure_win_text_width(app2, w2.index, "abc ", goose_ui::FontRole.Body);
+    let plain_w = goose_ui::measure_win_text_width(app2, w2.index, "abc", goose_ui::FontRole.Body);
+    assert(trail_w > plain_w);
+
+    var w_ed = goose_ui::WIDGET_NONE;
+    var w_lbl = goose_ui::WIDGET_NONE;
+    var w_sc2 = goose_ui::WIDGET_NONE;
+    app2.ui(w2) { u =>
+        u.padding(12.0).spacing(8.0);
+        u.line_edit("Memo", sample).width(240.0).bind(w_ed);
+        u.label("{\"ts\":\"2026-11-24T20:19:39.708\",\"seq\":2,\"level\":\"info\",\"target\":\"app\",\"msg\":\"YuLauncher started\",\"pid\":7496,\"tid\":50844,\"fields\":{\"version\":\"0.1.0-alpha\",\"backend\":\"direct2d\",\"locale\":\"ja\"}}")
+            .mono().wrap().text_align(goose_ui::Align.Start, goose_ui::Align.Start).height(76.0).bind(w_lbl);
+        u.scroll_area(8.0, 8.0) { sc2 =>
+            sc2.stretch(1.0).bind(w_sc2);
+            sc2.frame(goose_ui::LayoutKind.VBox, 6.0, 8.0) { c1 =>
+                c1.label("Top Card");
+                c1.spacer().height(90.0);
+            };
+            sc2.list_view(32.0).min_size(120.0, 180.0).item("Note 1").item("Note 2");
+        };
+    };
+
+    app2.windows[w2.index].visible = true;
+    app2.update_layout(w2, true);
+    app2.set_focus(w2, w_ed);
+    assert(app2.widgets[w_ed.index].text_scroll_byte > 0);
+    assert(app2.widgets[w_lbl.index].word_wrap);
+    app2.render_window(w2);
+
+    assert(app2.widgets[w_sc2.index].scroll_max_y > 0.0);
+    let partial_sy = if app2.widgets[w_sc2.index].scroll_max_y > 60.0 { 60.0 } else { app2.widgets[w_sc2.index].scroll_max_y * 0.5 };
+    app2.widgets[w_sc2.index].scroll_y = partial_sy;
+    app2.update_layout(w2, true);
+    app2.render_window(w2);
+
+    app2.destroy_all();
+    print("[OK] LineEdit horizontal scroll, DirectWrite font metrics, wrapped Label & D2D hardware clipping");
+}
+
 fn main() {
     test_tree_and_handles();
     test_layouts();
@@ -1150,5 +1604,8 @@ fn main() {
     test_regressions_inputs_and_signals();
     test_regressions_layout_and_pools();
     test_json_logging();
+    test_i18n();
+    test_window_positioning();
+    test_regressions_text_scroll_and_wrap();
     print("ALL GOOSE_UI TESTS PASSED");
 }

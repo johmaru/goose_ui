@@ -793,6 +793,14 @@ fn update_layout(app: App&, win: WindowId, force: bool = false) {
         layout_widget(app, root_id, RectF { x: 0.0, y: 0.0, w: w, h: root_h });
     }
 
+    let foc = app.windows[win.index].focused;
+    if app.valid_widget(foc) {
+        match app.widgets[foc.index].kind {
+            LineEdit => { ensure_line_edit_caret_visible(app, foc); },
+            _ => {},
+        }
+    }
+
     app.windows[win.index].layout_dirty = false;
     app.windows[win.index].dirty = true;
 }

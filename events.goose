@@ -220,6 +220,10 @@ fn set_focus(app: App&, win: WindowId, id: WidgetId) {
     }
     if app.valid_widget(id) && app.widgets[id.index].visible && app.widgets[id.index].enabled && app.widgets[id.index].focusable {
         app.windows[win.index].focused = id;
+        match app.widgets[id.index].kind {
+            LineEdit => { ensure_line_edit_caret_visible(app, id); },
+            _ => {},
+        }
         app.push_signal(Signal.FocusChanged { widget: id, window: win, focused: true });
     } else {
         app.windows[win.index].focused = WIDGET_NONE;
@@ -325,6 +329,7 @@ fn line_edit_delete_selection(app: App&, id: WidgetId) -> bool {
     str_set(app.str_pool, app.widgets[id.index].text, tmp, 64);
     app.widgets[id.index].caret = lo;
     app.widgets[id.index].sel_anchor = lo;
+    ensure_line_edit_caret_visible(app, id);
     return true;
 }
 
@@ -346,6 +351,7 @@ fn line_edit_insert_bytes(app: App&, id: WidgetId, bytes: const u8[:]) -> bool {
     let new_pos = pos + (bytes.len as! i32);
     app.widgets[id.index].caret = new_pos;
     app.widgets[id.index].sel_anchor = new_pos;
+    ensure_line_edit_caret_visible(app, id);
     return true;
 }
 
@@ -500,17 +506,17 @@ fn handle_mouse_move(app: App&, win: WindowId, px: f32, py: f32) {
             },
             LineEdit => {
                 let r = app.widgets[cap.index].rect;
-                let fsz = font_size_for_role(app.theme, app.widgets[cap.index].font_role);
-                let is_mono = match app.widgets[cap.index].font_role { Mono => true, _ => false };
-                let pos = caret_byte_from_x(
-                    app.str_view(app.widgets[cap.index].text),
-                    px - (r.x + 9.0),
-                    fsz,
-                    is_mono,
-                    app.widgets[cap.index].password_mode
-                );
+                let vis_start = utf8_snap_boundary(app.str_view(app.widgets[cap.index].text), app.widgets[cap.index].text_scroll_byte);
+                let rel_x = px - (r.x + 9.0);
+                var pos: i32 = 0;
+                if rel_x < 0.0 && vis_start > 0 {
+                    pos = utf8_prev_char(app.str_view(app.widgets[cap.index].text), vis_start);
+                } else {
+                    pos = caret_byte_from_x_line_edit(app, win.index, cap, vis_start, rel_x);
+                }
                 if pos != app.widgets[cap.index].caret {
                     app.widgets[cap.index].caret = pos;
+                    ensure_line_edit_caret_visible(app, cap);
                     app.mark_dirty(win);
                 }
                 return;
@@ -723,25 +729,20 @@ fn handle_mouse_down(app: App&, win: WindowId, px: f32, py: f32, button: i32) {
         },
         LineEdit => {
             let r = app.widgets[hit.index].rect;
-            let fsz = font_size_for_role(app.theme, app.widgets[hit.index].font_role);
-            let is_mono = match app.widgets[hit.index].font_role { Mono => true, _ => false };
             if is_dbl {
                 // Double-click selects all text
                 app.widgets[hit.index].sel_anchor = 0;
                 app.widgets[hit.index].caret = app.widgets[hit.index].text.len;
+                ensure_line_edit_caret_visible(app, hit);
             } else {
-                let pos = caret_byte_from_x(
-                    app.str_view(app.widgets[hit.index].text),
-                    px - (r.x + 9.0),
-                    fsz,
-                    is_mono,
-                    app.widgets[hit.index].password_mode
-                );
+                let vis_start = utf8_snap_boundary(app.str_view(app.widgets[hit.index].text), app.widgets[hit.index].text_scroll_byte);
+                let pos = caret_byte_from_x_line_edit(app, win.index, hit, vis_start, px - (r.x + 9.0));
                 app.widgets[hit.index].caret = pos;
                 let mods = current_key_mods(app.windows[win.index].headless);
                 if (mods & KMOD_SHIFT) == 0 {
                     app.widgets[hit.index].sel_anchor = pos;
                 }
+                ensure_line_edit_caret_visible(app, hit);
                 app.windows[win.index].captured = hit;
                 if !app.windows[win.index].headless { app.windows[win.index].hwnd.set_capture(); }
             }
@@ -956,17 +957,21 @@ fn handle_mouse_wheel(app: App&, win: WindowId, px: f32, py: f32, delta: i32) {
         _ => {},
     }
 
-    let sc = find_scroll_ancestor(app, hit);
-    if app.valid_widget(sc) && app.widgets[sc.index].scroll_max_y > 0.0 {
-        let step: f32 = if delta > 0 { -42.0 } else { 42.0 };
-        let ny = clamp_f32(app.widgets[sc.index].scroll_y + step, 0.0, app.widgets[sc.index].scroll_max_y);
-        if ny != app.widgets[sc.index].scroll_y {
-            app.widgets[sc.index].scroll_y = ny;
-            match app.widgets[sc.index].kind {
-                ScrollArea => { app.mark_layout_dirty(win); },
-                _ => { app.mark_dirty(win); },
+    var cur = find_scroll_ancestor(app, hit);
+    while app.valid_widget(cur) {
+        if app.widgets[cur.index].scroll_max_y > 0.0 {
+            let step: f32 = if delta > 0 { -42.0 } else { 42.0 };
+            let ny = clamp_f32(app.widgets[cur.index].scroll_y + step, 0.0, app.widgets[cur.index].scroll_max_y);
+            if ny != app.widgets[cur.index].scroll_y {
+                app.widgets[cur.index].scroll_y = ny;
+                match app.widgets[cur.index].kind {
+                    ScrollArea => { app.mark_layout_dirty(win); },
+                    _ => { app.mark_dirty(win); },
+                }
+                return;
             }
         }
+        cur = find_scroll_ancestor(app, app.widgets[cur.index].parent);
     }
 }
 
@@ -1008,19 +1013,23 @@ fn handle_key_down(app: App&, win: WindowId, key: u32, mods: u32) {
                 let np = utf8_prev_char(app.str_view(app.widgets[foc.index].text), app.widgets[foc.index].caret);
                 app.widgets[foc.index].caret = np;
                 if !shift { app.widgets[foc.index].sel_anchor = np; }
+                ensure_line_edit_caret_visible(app, foc);
                 app.mark_dirty(win);
             } else if key == win32::VK_RIGHT {
                 let np = utf8_next_char(app.str_view(app.widgets[foc.index].text), app.widgets[foc.index].caret);
                 app.widgets[foc.index].caret = np;
                 if !shift { app.widgets[foc.index].sel_anchor = np; }
+                ensure_line_edit_caret_visible(app, foc);
                 app.mark_dirty(win);
             } else if key == 0x24 { // VK_HOME
                 app.widgets[foc.index].caret = 0;
                 if !shift { app.widgets[foc.index].sel_anchor = 0; }
+                ensure_line_edit_caret_visible(app, foc);
                 app.mark_dirty(win);
             } else if key == 0x23 { // VK_END
                 app.widgets[foc.index].caret = n;
                 if !shift { app.widgets[foc.index].sel_anchor = n; }
+                ensure_line_edit_caret_visible(app, foc);
                 app.mark_dirty(win);
             } else if key == win32::VK_BACK {
                 if !app.widgets[foc.index].read_only {
@@ -1053,6 +1062,7 @@ fn handle_key_down(app: App&, win: WindowId, key: u32, mods: u32) {
             } else if ctrl && key == 'A' {
                 app.widgets[foc.index].sel_anchor = 0;
                 app.widgets[foc.index].caret = n;
+                ensure_line_edit_caret_visible(app, foc);
                 app.mark_dirty(win);
             } else if ctrl && key == 'C' {
                 if !app.widgets[foc.index].password_mode && !app.windows[win.index].headless {

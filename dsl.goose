@@ -10,6 +10,7 @@ import types;
 import theme;
 import widget;
 import tree;
+import i18n;
 
 // Lightweight 16-byte builder cursor (compiles away to registers).
 struct Ui {
@@ -60,6 +61,7 @@ fn action(u: Ui, control_id: i64) -> Ui { u.app.set_tag(u.parent, control_id); r
 fn name(u: Ui, n: const u8[:]) -> Ui { u.app.set_name(u.parent, n); return u; }
 fn bind(u: Ui, out_id: WidgetId&) -> Ui { out_id = u.parent; return u; }
 fn layout_kind(u: Ui, k: LayoutKind) -> Ui { u.app.set_layout(u.parent, k); return u; }
+fn form_label_width(u: Ui, w: f32) -> Ui { u.app.set_form_label_width(u.parent, w); return u; }
 
 // --- Scoped Nested Containers (Compose / SwiftUI Style) ---------------------
 
@@ -137,6 +139,19 @@ fn tab<F>(u: Ui, title: const u8[:], layout: LayoutKind = LayoutKind.VBox, spaci
     return Node { app: u.app, id: pid };
 }
 
+fn tr_group_box<F>(u: Ui, title_key: const u8[:], layout: LayoutKind = LayoutKind.VBox, spacing: f32 = 8.0, padding: f32 = 12.0) -> Node {
+    let cid = u.app.add_group_box(u.parent, "", layout, spacing, padding);
+    u.app.set_tr_text(cid, title_key);
+    F(Ui { app: u.app, parent: cid });
+    return Node { app: u.app, id: cid };
+}
+
+fn tr_tab<F>(u: Ui, title_key: const u8[:], layout: LayoutKind = LayoutKind.VBox, spacing: f32 = 10.0, padding: f32 = 12.0) -> Node {
+    let pid = u.app.add_tr_tab(u.parent, title_key, layout, spacing, padding);
+    F(Ui { app: u.app, parent: pid });
+    return Node { app: u.app, id: pid };
+}
+
 // --- Leaf Widget Builders on Ui ---------------------------------------------
 
 fn spacer(u: Ui, stretch: f32 = 1.0) -> Node {
@@ -209,6 +224,45 @@ fn canvas(u: Ui, min_w: f32 = 200.0, min_h: f32 = 160.0) -> Node {
     return Node { app: u.app, id: u.app.add_canvas(u.parent, min_w, min_h) };
 }
 
+// Translated leaf widget builders (auto-retranslate when App locale changes)
+fn tr_label(u: Ui, key: const u8[:], role: FontRole = FontRole.Body) -> Node {
+    let id = u.app.add_label(u.parent, "", role);
+    u.app.set_tr_text(id, key);
+    return Node { app: u.app, id: id };
+}
+
+fn tr_button(u: Ui, key: const u8[:], variant: ButtonVariant = ButtonVariant.Default) -> Node {
+    let id = u.app.add_button(u.parent, "", variant);
+    u.app.set_tr_text(id, key);
+    return Node { app: u.app, id: id };
+}
+
+fn tr_checkbox(u: Ui, key: const u8[:], checked: bool = false) -> Node {
+    let id = u.app.add_checkbox(u.parent, "", checked);
+    u.app.set_tr_text(id, key);
+    return Node { app: u.app, id: id };
+}
+
+fn tr_radio(u: Ui, key: const u8[:], checked: bool = false) -> Node {
+    let id = u.app.add_radio_button(u.parent, "", checked);
+    u.app.set_tr_text(id, key);
+    return Node { app: u.app, id: id };
+}
+
+fn tr_toggle(u: Ui, key: const u8[:], checked: bool = false) -> Node {
+    let id = u.app.add_toggle_switch(u.parent, "", checked);
+    u.app.set_tr_text(id, key);
+    return Node { app: u.app, id: id };
+}
+
+fn tr_line_edit(u: Ui, placeholder_key: const u8[:], initial_text: const u8[:] = "") -> Node {
+    let id = u.app.add_line_edit(u.parent, "", initial_text);
+    if placeholder_key.len > 0 {
+        u.app.set_tr_placeholder(id, placeholder_key);
+    }
+    return Node { app: u.app, id: id };
+}
+
 // --- Fluent UFCS Modifiers on Node ------------------------------------------
 
 fn widget(n: Node) -> WidgetId { n.id }
@@ -229,6 +283,7 @@ fn policy(n: Node, h: SizePolicy, v: SizePolicy) -> Node { n.app.set_size_policy
 fn align(n: Node, h: Align, v: Align = Align.Stretch) -> Node { n.app.set_align(n.id, h, v); return n; }
 fn padding(n: Node, all: f32) -> Node { n.app.set_padding(n.id, all); return n; }
 fn spacing(n: Node, sp: f32) -> Node { n.app.set_spacing(n.id, sp); return n; }
+fn form_label_width(n: Node, w: f32) -> Node { n.app.set_form_label_width(n.id, w); return n; }
 
 // Win32 / WinForms-style absolute placement + resize anchor
 fn bounds(n: Node, x: f32, y: f32, w: f32, h: f32, anchor: u8 = ANCHOR_TOP_LEFT, ref_w: f32 = 0.0, ref_h: f32 = 0.0) -> Node {
@@ -244,6 +299,7 @@ fn caption(n: Node) -> Node { n.app.set_font_role(n.id, FontRole.Caption); retur
 fn mono(n: Node) -> Node { n.app.set_font_role(n.id, FontRole.Mono); return n; }
 fn center(n: Node) -> Node { n.app.set_text_align(n.id, Align.Center, Align.Center); return n; }
 fn text_align(n: Node, h: Align, v: Align = Align.Center) -> Node { n.app.set_text_align(n.id, h, v); return n; }
+fn wrap(n: Node, on: bool = true) -> Node { n.app.set_word_wrap(n.id, on); return n; }
 
 // Button Variants & States
 fn primary(n: Node) -> Node { n.app.set_button_variant(n.id, ButtonVariant.Primary); return n; }
@@ -269,6 +325,13 @@ fn item(n: Node, text: const u8[:], subtext: const u8[:] = "", item_tag: i64 = 0
     n.app.add_item(n.id, text, subtext, item_tag);
     return n;
 }
+fn tr_item(n: Node, text_key: const u8[:], subtext_key: const u8[:] = "", item_tag: i64 = 0) -> Node {
+    n.app.add_tr_item(n.id, text_key, subtext_key, item_tag);
+    return n;
+}
+fn tr_text(n: Node, key: const u8[:]) -> Node { n.app.set_tr_text(n.id, key); return n; }
+fn tr_placeholder(n: Node, key: const u8[:]) -> Node { n.app.set_tr_placeholder(n.id, key); return n; }
+fn tr_tooltip(n: Node, key: const u8[:]) -> Node { n.app.set_tr_tooltip(n.id, key); return n; }
 fn select(n: Node, idx: i32) -> Node { n.app.set_selected_index(n.id, idx); return n; }
 
 // Inline Declarative Signal -> Slot Connections

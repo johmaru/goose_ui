@@ -11,12 +11,12 @@
 
 | DSL Method | Description & Features |
 | --- | --- |
-| `u.label(text, role = FontRole.Body)` | Single-line text label (`.heading()`, `.subheading()`, `.bold()`, `.caption()`, `.mono()`, `.center()`) |
+| `u.label(text, role = FontRole.Body)` | Single-line or wrapped (`.wrap()` / `set_word_wrap`) text label (`.heading()`, `.subheading()`, `.bold()`, `.caption()`, `.mono()`, `.center()`) |
 | `u.button(text, variant = Default)` | Push button with 5 variants (`.primary()`, `.secondary()`, `.danger()`, `.ghost()`) and optional `.checkable()` toggle state |
 | `u.checkbox(text, checked = false)` | CheckBox emitting `Toggled` and `Clicked` |
 | `u.radio(text, checked = false)` | RadioButton with automatic mutual exclusivity among siblings |
 | `u.toggle(text, checked = false)` | Modern animated-style ToggleSwitch emitting `Toggled` and `Clicked` |
-| `u.line_edit(placeholder = "", initial_text = "")` | Single-line text input with UTF-8 / CJK / emoji (surrogate pair) support, selection, Home/End/Arrows, `Ctrl+A/C/X/V` via Windows Clipboard, `.password()`, `.read_only()` |
+| `u.line_edit(placeholder = "", initial_text = "")` | Single-line horizontally scrolling text input with accurate per-window GDI/CJK/UTF-8 caret positioning, surrogate-pair emoji support, selection, Home/End/Arrows, `Ctrl+A/C/X/V` via Windows Clipboard, `.password()`, `.read_only()` |
 | `u.slider(min, max, initial, step, orientation)` | Horizontal or vertical slider supporting pointer drag, mouse wheel, and arrow keys |
 | `u.spin_box(min, max, initial, step, decimals)` | Numeric input with `+/-` buttons, mouse wheel, and arrow keys |
 | `u.progress_bar(min, max, initial)` | Progress bar with optional percentage label (`app.set_show_percentage`) |
@@ -37,11 +37,12 @@ app.set_status_text(win, "Saved successfully");
 ### Common `Node` Modifiers (UFCS Chains)
 
 - **Identity & Binding**: `.action(id)`, `.name("...")`, `.bind(var_id)`, `.widget()`
-- **Layout**: `.stretch(s)`, `.fixed(w, h)`, `.width(w)`, `.height(h)`, `.min_size(w, h)`, `.max_size(w, h)`, `.policy(h, v)`, `.align(h, v)`, `.padding(all)`, `.spacing(sp)`, `.bounds(x, y, w, h, anchor, ref_w, ref_h)`
-- **Typography**: `.heading()`, `.subheading()`, `.bold()`, `.caption()`, `.mono()`, `.center()`, `.text_align(h, v)`
+- **Layout**: `.stretch(s)`, `.fixed(w, h)`, `.width(w)`, `.height(h)`, `.min_size(w, h)`, `.max_size(w, h)`, `.policy(h, v)`, `.align(h, v)`, `.padding(all)`, `.spacing(sp)`, `.form_label_width(w)`, `.bounds(x, y, w, h, anchor, ref_w, ref_h)`
+- **Typography**: `.heading()`, `.subheading()`, `.bold()`, `.caption()`, `.mono()`, `.center()`, `.text_align(h, v)`, `.wrap(on = true)`
 - **Appearance**: `.primary()`, `.secondary()`, `.danger()`, `.ghost()`, `.checkable()`, `.bg(c)`, `.fg(c)`, `.border(c, w)`, `.radius(r)`
 - **State & Input**: `.tooltip("...")`, `.placeholder("...")`, `.password()`, `.read_only()`, `.enabled(bool)`, `.visible(bool)`
 - **Items**: `.item(text, subtext = "", tag = 0)`, `.select(idx)`
+- **Multi-Language (i18n)**: `.tr_text(key)`, `.tr_placeholder(key)`, `.tr_tooltip(key)`, `.tr_item(text_key, subtext_key = "", tag = 0)`
 - **Declarative Connections**: `.connect(sig, receiver, slot, param)`, `.on_toggle_theme()`, `.on_click_close()`
 
 ---
@@ -75,6 +76,7 @@ The loop blocks in `win32::wait_event`, keeping **idle CPU usage at 0%** and rep
 | `CanvasMouseDown` / `Move` / `Up` / `Wheel` | Local-coordinate pointer input on a `Canvas` | `widget`, `window`, `x`, `y`, (`button` / `delta`) |
 | `FilesDropped` | Files dropped onto window (requires `app.enable_drop_files(win)`) | `window`, `count` |
 | `WindowResized` / `WindowClosed` | Window resize or close request | `window`, (`width`, `height`) |
+| `LocaleChanged` | Active i18n locale changed via `app.set_locale(...)` | `locale_index` |
 
 ### Win32-Style Action ID Dispatch
 
@@ -156,6 +158,10 @@ app.exec_with_canvas(paint_canvas) { sig =>
 - **Clipboard**: `clipboard_text() -> u8[>..]`, `set_clipboard_text(text)`
 - **Timers (`QTimer`)**: `start_timer(app, win, interval_ms, single_shot = false) -> u64`, `stop_timer(app, timer_id)`
 - **Drag & Drop**: `app.enable_drop_files(win, true)` → query `dropped_file_count()` and `dropped_file_path(i)` on `FilesDropped`
+- **Window Positioning**:
+  - Startup defaults (`App`): `set_window_start_position(WindowPosition)` (`SystemDefault`, `CenterPrimary`, `CenterMonitor`, `Manual`), `set_center_on_primary_display(enabled = true)`, `set_window_start_monitor(index)`, `set_window_start_position_manual(x, y)`, `window_start_position() -> WindowPosition`
+  - Runtime positioning: `center_window(win)`, `center_window_on_monitor(win, index)`, `set_window_position(win, x, y)`, `window_position(win) -> x, y`
+  - Work area & geometry helpers: `primary_work_area() -> win32::Rect`, `monitor_work_area(index) -> win32::Rect`, `compute_centered_pos(work, win_w, win_h) -> x, y`
 
 ---
 
@@ -228,7 +234,46 @@ Utility functions: `log_level_name(lvl)` and `parse_log_level(s) -> LogLevel, bo
 
 ---
 
-## 8. Headless Automated Testing
+## 8. Multi-Language Support / i18n (`i18n.goose`)
+
+`goose_ui` includes a zero-heap, live-retranslating internationalization engine with zero per-widget memory overhead when unused:
+
+```goose
+app.i18n_register_locale("en", "English");
+app.i18n_register_locale("ja", "日本語");
+app.set_fallback_locale("en");
+
+app.i18n_load_json_str("en", "{\"_locale_name\":\"English\",\"ui\":{\"save\":\"Save\",\"count\":\"{n} items\"}}");
+app.i18n_load_json_str("ja", "{\"_locale_name\":\"日本語\",\"ui\":{\"save\":\"保存\",\"count\":\"{n} 件\"}}");
+app.i18n_load_dir("locales"); // Optional external *.json overrides or extra languages
+
+// Auto-select based on Windows user locale (GetUserDefaultLocaleName) with fallback
+app.set_system_locale("en");
+
+// Declarative live-bound widgets in DSL
+app.ui(win) { u =>
+    u.tr_button("ui.save").primary().action(ID_SAVE);
+    u.tr_line_edit("ui.search_ph").tr_tooltip("ui.search_tip");
+};
+
+// Switch language at runtime -> updates all bound widgets, recalculates layout,
+// clears OpenGL text cache if needed, and emits Signal.LocaleChanged
+app.set_locale("ja");
+
+// Template formatting (named & positional)
+let msg = app.tr_fmt("ui.count") { f => f.int("n", 42); };
+```
+
+Key APIs:
+- **Catalog loading**: `i18n_register_locale`, `i18n_add`, `i18n_load_json_str`, `i18n_load_json_file`, `i18n_load_bundle_json_str`, `i18n_load_bundle_json_file`, `i18n_load_dir`, `i18n_clear`.
+- **Locale control & OS detection**: `system_locale()`, `system_language()`, `set_locale(code)`, `set_system_locale(fallback)`, `set_fallback_locale(code)`, `locale()`, `locale_display_name()`, `locale_count()`, `locale_code(i)`, `locale_name_at(i)`, `has_locale(code)`, `retranslate_all()`.
+- **Lookup & interpolation**: `tr(key)`, `tr_or(key, default)`, `tr_for(locale, key)`, `has_tr(key)`, `tr1`/`tr2`/`tr3`, `tr_fmt(key) { f => f.text(...).int(...).uint(...).num(...) }`.
+- **Live widget bindings**: `set_tr_text`, `set_tr_placeholder`, `set_tr_tooltip`, `set_tr_window_title`, `set_tr_status_text`, `add_tr_item`, `add_tr_tab`, `clear_tr_bindings`. Manual calls to `set_text` / `set_item_text` / `set_status_text` / `set_window_title` automatically detach any prior translation binding on that target.
+- **Standalone catalog**: `goose_ui::Translator` provides the full catalog, JSON/bundle/directory loader, OS detection, and formatting API independently of `App`.
+
+---
+
+## 9. Headless Automated Testing
 
 Test layout geometry, pointer/keyboard interaction, and emitted `Signal`s without creating OS windows or GPU contexts (see [`test/goose_ui_test.goose`](../test/goose_ui_test.goose)):
 

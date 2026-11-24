@@ -184,6 +184,19 @@ enum RenderBackend {
     OpenGL,   // Hardware-accelerated OpenGL 3.3 Core SDF + GPU VRAM atlas rendering
 }
 
+// Startup window placement policy configured on App before creating windows.
+enum WindowPosition {
+    SystemDefault, // OS default placement (CW_USEDEFAULT)
+    CenterPrimary, // Centered inside the primary (main) display work area (excluding taskbar)
+    CenterMonitor, // Centered inside a specific monitor's work area (index via set_window_start_monitor)
+    Manual,        // Explicit top-left screen coordinates (via set_window_start_position_manual)
+}
+
+let WIN_POS_DEFAULT: i32 = 0;
+let WIN_POS_CENTER_PRIMARY: i32 = 1;
+let WIN_POS_CENTER_MONITOR: i32 = 2;
+let WIN_POS_MANUAL: i32 = 3;
+
 // Compact 12-byte handle into App.str_pool (replaces large inline u8[..N] arrays).
 struct StrSpan {
     off: i32 = 0,
@@ -318,6 +331,7 @@ enum Signal {
     FilesDropped { window: WindowId, count: i32 },
     WindowResized { window: WindowId, width: i32, height: i32 },
     WindowClosed { window: WindowId },
+    LocaleChanged { locale_index: i32 },
 }
 
 enum SignalKind {
@@ -422,4 +436,36 @@ struct LogEntryView {
     pid: i64 = 0,
     tid: i64 = 0,
     raw_json: const u8[:] = "",
+}
+
+// --- Multi-Language (i18n) Types --------------------------------------------
+
+let I18N_TARGET_WIDGET_TEXT: u8 = 0;
+let I18N_TARGET_WIDGET_PLACEHOLDER: u8 = 1;
+let I18N_TARGET_WIDGET_TOOLTIP: u8 = 2;
+let I18N_TARGET_LIST_ITEM_TEXT: u8 = 3;
+let I18N_TARGET_LIST_ITEM_SUBTEXT: u8 = 4;
+let I18N_TARGET_WINDOW_TITLE: u8 = 5;
+let I18N_TARGET_STATUS_BAR: u8 = 6;
+
+struct I18nLocale {
+    code: StrSpan = StrSpan {},
+    display_name: StrSpan = StrSpan {},
+    parent_idx: i32 = -1,
+}
+
+struct I18nEntry {
+    locale_idx: i32 = -1,
+    key_hash: u64 = 0,
+    key: StrSpan = StrSpan {},
+    val: StrSpan = StrSpan {},
+}
+
+struct I18nBinding {
+    alive: bool = true,
+    target_kind: u8 = 0,
+    window: WindowId = WINDOW_NONE,
+    widget: WidgetId = WIDGET_NONE,
+    item_uid: u64 = 0,
+    key: StrSpan = StrSpan {},
 }

@@ -16,8 +16,9 @@ A **zero-heap, dual-backend retained-mode GUI framework** for the [Goose](https:
   - `Slider` (horizontal/vertical, drag/wheel/arrows), `SpinBox`, `ProgressBar`
   - `ComboBox` (floating top-level dropdown overlay), `ListView` (virtualized scrolling, keyboard nav, double-click activation)
   - `Canvas` (custom `QPainter`-style 2D vector & text drawing surface inside any layout, working on both GDI and Direct2D)
-- **Native Windows 11 Integration** — DWM dark titlebar synced with live Dark/Light theme switching, rounded corners, native Win32 MenuBar & Context Menus, Common Dialogs (Open/Save/Folder/Color/Input/MessageBox), Clipboard, `QTimer`-style timers, and Drag & Drop files.
+- **Native Windows 11 Integration** — DWM dark titlebar synced with live Dark/Light theme switching, rounded corners, configurable startup window positioning (`WindowPosition.CenterPrimary` / `CenterMonitor` / `Manual`) & `center_window`, native Win32 MenuBar & Context Menus, Common Dialogs (Open/Save/Folder/Color/Input/MessageBox), Clipboard, `QTimer`-style timers, and Drag & Drop files.
 - **Structured JSON Logging (`log.goose`)** — User-specified output path (auto-creating parent directories), `JsonLines` (NDJSON) and `JsonArray` formats, size-based file rotation, fluent `LogFields`/`LogArray` builders, `App`-integrated & standalone `JsonLogger` APIs, optional automatic `Signal` tracing, and `each_json_log_entry`.
+- **Multi-Language / i18n (`i18n.goose`)** — Zero-heap translation catalogs (`App`-integrated & standalone `Translator`), flat/nested/bundle JSON & directory (`*.json`) loading, Windows OS locale detection (`system_locale` / `system_language`), BCP-47 hierarchical fallback, named & positional template interpolation (`tr_fmt`, `tr1`–`tr3`), and instant live widget re-translation via `.tr_*` DSL bindings & `Signal.LocaleChanged`.
 
 ## Documentation
 
@@ -164,7 +165,8 @@ pwsh -File bench/run_bench.ps1
 - `painter.goose` — Dual-backend `Painter` (Software GDI + ClearType & Direct2D + DirectWrite), widget renderers, overlays & tooltips
 - `events.goose` — Hit testing, focus traversal, LineEdit/Slider/Splitter/List/Tab interaction, event loop, synthetic test injection
 - `native.goose` — Win32 MenuBar, Context Menus, Common Dialogs, MessageBox, Clipboard, Timers, Drop files
-- `dsl.goose` — SwiftUI/Compose-style scoped nested UI builder (`app.ui(win) { u => ... }`), fluent modifiers, Win32 action IDs, and `Anchor` placement
+- `i18n.goose` — Multi-language i18n (JSON/bundle/directory catalogs, OS locale detection, template interpolation, live re-translation, standalone `Translator`)
+- `dsl.goose` — SwiftUI/Compose-style scoped nested UI builder (`app.ui(win) { u => ... }`), `.tr_*` i18n builders, fluent modifiers, Win32 action IDs, and `Anchor` placement
 - `win32-goose/` — Git submodule ([`johmaru/win32-goose`](https://github.com/johmaru/win32-goose))
 - `docs/` — Guides and API references
 - `examples/` — `counter.goose`, `todo_app.goose`, `kitchen_sink.goose`

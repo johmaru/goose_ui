@@ -63,10 +63,11 @@ fn main() {
     // 1. Create the root App state container (zero heap allocations)
     var app = goose_ui::App { .. };
 
-    // 2. Initialize: (dark_theme, backend)
+    // 2. Initialize: (dark_theme, backend) and optional startup window position
     app.init(true, goose_ui::RenderBackend.Software);
+    app.set_window_start_position(goose_ui::WindowPosition.CenterPrimary);
 
-    // 3. Create a top-level window
+    // 3. Create a top-level window (centered in primary display work area)
     let win = app.create_window("My App", 640, 420);
 
     // 4. Build the UI tree with the scoped nested DSL

@@ -971,6 +971,7 @@ fn log_signal(app: App&, sig: Signal) {
         FilesDropped s => { sig_name = "FilesDropped"; win = s.window; },
         WindowResized s => { sig_name = "WindowResized"; win = s.window; },
         WindowClosed s => { sig_name = "WindowClosed"; win = s.window; },
+        LocaleChanged _s => { sig_name = "LocaleChanged"; },
     }
 
     var buf: u8[>..] = [];
@@ -1011,6 +1012,15 @@ fn log_signal(app: App&, sig: Signal) {
         CanvasWheel s => { f.num("x", s.x); f.num("y", s.y); f.int("delta", s.delta); },
         FilesDropped s => { f.int("count", s.count); },
         WindowResized s => { f.int("width", s.width); f.int("height", s.height); },
+        LocaleChanged s => {
+            f.int("locale_index", s.locale_index);
+            if s.locale_index >= 0 && s.locale_index < app.i18n_locales.len {
+                let sp = app.i18n_locales[s.locale_index].code;
+                if sp.len > 0 && sp.off >= 0 && sp.off + sp.len <= app.i18n_pool.len {
+                    f.text("locale", app.i18n_pool[sp.off..sp.off + sp.len]);
+                }
+            }
+        },
         _ => {},
     }
 

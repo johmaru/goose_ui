@@ -69,6 +69,7 @@ struct Widget {
     font_role: FontRole = FontRole.Body,
     text_align_h: Align = Align.Start,
     text_align_v: Align = Align.Center,
+    word_wrap: bool = false,
 
     // Widget-specific state
     variant: ButtonVariant = ButtonVariant.Default,
@@ -101,6 +102,7 @@ struct Widget {
     caret: i32 = 0,
     sel_anchor: i32 = 0,
     text_scroll_x: f32 = 0.0,
+    text_scroll_byte: i32 = 0,
 
     // Compact style override
     style: WidgetStyle = WidgetStyle {},
@@ -109,6 +111,7 @@ struct Widget {
 // Item belonging to a ListView, ComboBox, or TabWidget (strings pooled in App.str_pool).
 struct ListItem {
     alive: bool = true,
+    uid: u64 = 0,
     owner: WidgetId = WIDGET_NONE,
     text: StrSpan = StrSpan {},
     subtext: StrSpan = StrSpan {},
@@ -158,9 +161,13 @@ struct Window {
     fonts: FontSet = FontSet {},
     gdi_fonts: GdiFontSet = GdiFontSet {},
     gl2d_fonts: Gl2dFontSet = Gl2dFontSet {},
+    metric_dc: win32::Hdc = win32::Hdc {},
+    metric_fonts: GdiFontSet = GdiFontSet {},
     menu_bar: win32::Hmenu = win32::Hmenu {},
 
     title: StrSpan = StrSpan {},
+    x: i32 = 0,
+    y: i32 = 0,
     width: i32 = 800,
     height: i32 = 600,
     dpi: u32 = 96,
@@ -215,6 +222,10 @@ root struct App {
     running: bool = false,
     quit_on_last_window_closed: bool = true,
     backend: RenderBackend = RenderBackend.Direct2D,
+    window_pos_mode: i32 = WIN_POS_DEFAULT,
+    window_pos_x: i32 = 0,
+    window_pos_y: i32 = 0,
+    window_pos_monitor: i32 = 0,
     theme: Theme = Theme {},
     next_timer_id: u64 = 1,
     active_cursor: CursorShape = CursorShape.Arrow,
@@ -232,4 +243,14 @@ root struct App {
     focus_order: WidgetId[>..<] = [],
     log: LogState = LogState {},
     log_path_span: StrSpan = StrSpan {},
+
+    // Multi-language (i18n) state & sparse live widget bindings
+    next_list_item_uid: u64 = 1,
+    i18n_active: i32 = -1,
+    i18n_fallback: i32 = -1,
+    i18n_pool: u8[>..] = [],
+    i18n_locales: I18nLocale[>..] = [],
+    i18n_entries: I18nEntry[>..] = [],
+    i18n_buckets: i32[>..<] = [],
+    i18n_bindings: I18nBinding[>..] = [],
 }

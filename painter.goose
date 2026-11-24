@@ -30,22 +30,13 @@ struct Painter {
     gl2d_fonts: Gl2dFontSet = Gl2dFontSet {},
     hdc: win32::Hdc = win32::Hdc {},
     gdi_fonts: GdiFontSet = GdiFontSet {},
+    metric_dc: win32::Hdc = win32::Hdc {},
+    metric_fonts: GdiFontSet = GdiFontSet {},
     ox: f32 = 0.0,
     oy: f32 = 0.0,
     theme: Theme = Theme {},
     width: f32 = 0.0,
     height: f32 = 0.0,
-}
-
-fn select_font(fonts: const FontSet&, role: FontRole) -> win32::D2dFont {
-    return match role {
-        Body => fonts.body,
-        BodyBold => fonts.body_bold,
-        Heading => fonts.heading,
-        Subheading => fonts.subheading,
-        Caption => fonts.caption,
-        Mono => fonts.mono,
-    };
 }
 
 fn select_gdi_font(fonts: const GdiFontSet&, role: FontRole) -> win32::Hfont {
@@ -279,6 +270,60 @@ fn draw_line(p: const Painter&, x0: f32, y0: f32, x1: f32, y1: f32, c: Color, st
     }
 }
 
+fn measure_painter_text_width(p: const Painter&, text: const u8[:], role: FontRole) -> f32 {
+    if text.len == 0 { return 0.0; }
+    match p.backend {
+        Direct2D => {
+            if p.d2d.is_valid() {
+                let df = select_font(p.fonts, role);
+                if df.is_valid() {
+                    let w, _h = p.d2d.measure_text(text, df);
+                    return w;
+                }
+            }
+        },
+        Software, OpenGL => {
+            if p.metric_dc.is_valid() {
+                let hf = select_metric_hfont(p.metric_fonts, role);
+                if hf.is_valid() {
+                    return measure_gdi_text_width(p.metric_dc, hf, text);
+                }
+            }
+        },
+    }
+    return measure_text_width_role(text, p.theme, role);
+}
+
+fn fit_painter_text_bytes(p: const Painter&, text: const u8[:], max_w: f32, role: FontRole) -> i64 {
+    if text.len == 0 || max_w <= 0.0 { return 0; }
+    if measure_painter_text_width(p, text, role) <= max_w {
+        return text.len;
+    }
+    var bounds: i64[>..] = [];
+    bounds.push(0);
+    var i: i64 = 0;
+    while i < text.len {
+        let b0 = text[i];
+        var step: i64 = 1;
+        if b0 >= 0xF0 && i + 3 < text.len { step = 4; }
+        else if b0 >= 0xE0 && i + 2 < text.len { step = 3; }
+        else if b0 >= 0xC0 && i + 1 < text.len { step = 2; }
+        i += step;
+        bounds.push(i);
+    }
+    var lo: i64 = 0;
+    var hi: i64 = bounds.len - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if measure_painter_text_width(p, text[..bounds[mid]], role) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return bounds[lo];
+}
+
 fn draw_text(
     p: const Painter&,
     text: const u8[:],
@@ -332,6 +377,113 @@ fn draw_text(
             guard f.is_valid() else { return; }
             p.gl2d.draw_text(text, f, p.ox + x, p.oy + y, w, h, align_to_gl2d_h(h_align), align_to_gl2d_v(v_align), to_d2d(c));
         },
+    }
+}
+
+fn draw_text_wrapped(
+    p: const Painter&,
+    text: const u8[:],
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    c: Color,
+    role: FontRole = FontRole.Body,
+    h_align: Align = Align.Start,
+    v_align: Align = Align.Start
+) {
+    guard text.len > 0 && w > 2.0 && h > 2.0 && c.a > 0.0 else { return; }
+    let fsz = font_size_for_role(p.theme, role);
+    let line_h = fsz * 1.38;
+    var max_lines = (h / line_h) as! i32;
+    if max_lines < 1 { max_lines = 1; }
+    if max_lines > 64 { max_lines = 64; }
+
+    let wrap_w = if w > 2.0 { w - 2.0 } else { w };
+    var starts: i64[>..] = [];
+    var ends: i64[>..] = [];
+    var total_h: f32 = 0.0;
+    var pos: i64 = 0;
+
+    while pos < text.len && starts.len < max_lines {
+        var seg_end = pos;
+        while seg_end < text.len && text[seg_end] != '\n' && text[seg_end] != '\r' {
+            seg_end += 1;
+        }
+        if seg_end == pos {
+            starts.push(pos);
+            ends.push(pos);
+            total_h += line_h;
+            if pos < text.len && text[pos] == '\r' { pos += 1; }
+            if pos < text.len && text[pos] == '\n' { pos += 1; }
+            continue;
+        }
+
+        var fit = fit_painter_text_bytes(p, text[pos..seg_end], wrap_w, role);
+        if fit <= 0 {
+            let b0 = text[pos];
+            var step: i64 = 1;
+            if b0 >= 0xF0 && pos + 3 < seg_end { step = 4; }
+            else if b0 >= 0xE0 && pos + 2 < seg_end { step = 3; }
+            else if b0 >= 0xC0 && pos + 1 < seg_end { step = 2; }
+            fit = step;
+        }
+
+        var line_end = pos + fit;
+        var next_pos = line_end;
+        if line_end < seg_end {
+            let min_break = pos + fit / 2;
+            var k = line_end - 1;
+            while k >= min_break {
+                let ch = text[k];
+                if ch == ' ' {
+                    line_end = k;
+                    next_pos = k + 1;
+                    break;
+                }
+                if ch == ',' || ch == '/' || ch == '\\' || ch == '-' || ch == ':' {
+                    line_end = k + 1;
+                    next_pos = k + 1;
+                    break;
+                }
+                k -= 1;
+            }
+        } else {
+            if next_pos < text.len && text[next_pos] == '\r' { next_pos += 1; }
+            if next_pos < text.len && text[next_pos] == '\n' { next_pos += 1; }
+        }
+
+        starts.push(pos);
+        ends.push(line_end);
+        total_h += line_h;
+        pos = next_pos;
+    }
+
+    if starts.len == 0 { return; }
+    let truncated = pos < text.len;
+    let rem_h = if h > total_h { h - total_h } else { 0.0 };
+    var ly = match v_align {
+        Start => y,
+        End => y + rem_h,
+        _ => y + rem_h * 0.5,
+    };
+    if ly < y { ly = y; }
+
+    let ell_w = measure_painter_text_width(p, "...", role);
+    for li in 0..starts.len {
+        let s = starts[li];
+        let e = ends[li];
+        if truncated && li == starts.len - 1 {
+            var ell: u8[>..] = [];
+            let avail = if wrap_w > ell_w { wrap_w - ell_w } else { 0.0 };
+            let keep = fit_painter_text_bytes(p, text[s..e], avail, role);
+            if keep > 0 { ell.append(text[s..s + keep]); }
+            ell.append("...");
+            p.draw_text(ell, x, ly, w, line_h, c, role, h_align, Align.Center);
+        } else if e > s {
+            p.draw_text(text[s..e], x, ly, w, line_h, c, role, h_align, Align.Center);
+        }
+        ly += line_h;
     }
 }
 
@@ -395,7 +547,7 @@ fn paint_focus_ring(p: const Painter&, r: RectF, rad: f32) {
     p.draw_rounded_rect(r.x - 1.5, r.y - 1.5, r.w + 3.0, r.h + 3.0, rad + 1.5, p.theme.border_focus, 1.5);
 }
 
-fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Painter&) {
+fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Painter&, clip: RectF) {
     let w = app.widgets[id.index];
     let r = w.rect;
     guard r.w > 0.0 && r.h > 0.0 else { return; }
@@ -459,7 +611,11 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             } else {
                 t.text_primary
             };
-            p.draw_text(wtext, r.x, r.y, r.w, r.h, fg, w.font_role, w.text_align_h, w.text_align_v);
+            if w.word_wrap {
+                p.draw_text_wrapped(wtext, r.x, r.y, r.w, r.h, fg, w.font_role, w.text_align_h, w.text_align_v);
+            } else {
+                p.draw_text(wtext, r.x, r.y, r.w, r.h, fg, w.font_role, w.text_align_h, w.text_align_v);
+            }
         },
         Button => {
             var bg = t.surface_elevated;
@@ -632,42 +788,50 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             let pad_x: f32 = 9.0;
             let inner_x = r.x + pad_x;
             let inner_w = if r.w > pad_x * 2.0 { r.w - pad_x * 2.0 } else { 0.0 };
-            let fsz = font_size_for_role(t, w.font_role);
-            let is_mono = match w.font_role { Mono => true, _ => false };
             let wph = app.str_view(w.placeholder);
+            let vis_start = utf8_snap_boundary(wtext, w.text_scroll_byte);
 
             if wtext.len == 0 && wph.len > 0 {
                 p.draw_text(wph, inner_x, r.y, inner_w, r.h, t.text_muted, w.font_role, Align.Start, Align.Center);
-            } else if wtext.len > 0 {
+            } else if wtext.len > 0 && inner_w > 0.0 {
+                let vis_end = fit_line_edit_end(app, win_idx, wtext, vis_start, inner_w, w.font_role, w.password_mode);
                 var display: u8[>..] = [];
-                if w.password_mode {
-                    var i: i64 = 0;
-                    while i < wtext.len {
-                        if (wtext[i] & 0xC0) != 0x80 { display.push('*'); }
-                        i += 1;
+                if vis_end > vis_start {
+                    if w.password_mode {
+                        var i: i64 = vis_start;
+                        while i < vis_end {
+                            if (wtext[i] & 0xC0) != 0x80 { display.push('*'); }
+                            i += 1;
+                        }
+                    } else {
+                        display.append(wtext[vis_start..vis_end]);
                     }
-                } else {
-                    display.append(wtext);
                 }
 
                 if is_focused && w.caret != w.sel_anchor {
                     let s0 = if w.caret < w.sel_anchor { w.caret } else { w.sel_anchor };
                     let s1 = if w.caret > w.sel_anchor { w.caret } else { w.sel_anchor };
-                    let x0 = inner_x + measure_text_prefix_width(wtext, s0, fsz, is_mono, w.password_mode);
-                    let x1 = inner_x + measure_text_prefix_width(wtext, s1, fsz, is_mono, w.password_mode);
-                    let sx = clamp_f32(x0, inner_x, inner_x + inner_w);
-                    let ex = clamp_f32(x1, inner_x, inner_x + inner_w);
-                    if ex > sx {
-                        p.fill_rounded_rect(sx, r.y + 5.0, ex - sx, r.h - 10.0, 2.0, t.selection_bg);
+                    let ds0 = if s0 > vis_start { s0 } else { vis_start };
+                    let ds1 = if s1 < vis_end { s1 } else { vis_end };
+                    if ds1 > ds0 {
+                        let x0 = inner_x + line_edit_slice_width(app, win_idx, wtext, vis_start, ds0, w.font_role, w.password_mode);
+                        let x1 = inner_x + line_edit_slice_width(app, win_idx, wtext, vis_start, ds1, w.font_role, w.password_mode);
+                        let sx = clamp_f32(x0, inner_x, inner_x + inner_w);
+                        let ex = clamp_f32(x1, inner_x, inner_x + inner_w);
+                        if ex > sx {
+                            p.fill_rounded_rect(sx, r.y + 5.0, ex - sx, r.h - 10.0, 2.0, t.selection_bg);
+                        }
                     }
                 }
 
-                let fg = if !w.enabled { t.text_disabled } else if has_fg(w.style) { unpack_rgba(w.style.fg_rgba) } else { t.text_primary };
-                p.draw_text(display, inner_x, r.y, inner_w, r.h, fg, w.font_role, Align.Start, Align.Center);
+                if display.len > 0 {
+                    let fg = if !w.enabled { t.text_disabled } else if has_fg(w.style) { unpack_rgba(w.style.fg_rgba) } else { t.text_primary };
+                    p.draw_text(display, inner_x, r.y, inner_w, r.h, fg, w.font_role, Align.Start, Align.Center);
+                }
             }
 
-            if is_focused && w.enabled && !w.read_only {
-                let cx_off = measure_text_prefix_width(wtext, w.caret, fsz, is_mono, w.password_mode);
+            if is_focused && w.enabled && !w.read_only && w.caret >= vis_start {
+                let cx_off = line_edit_slice_width(app, win_idx, wtext, vis_start, w.caret, w.font_role, w.password_mode);
                 let cx = clamp_f32(inner_x + cx_off, inner_x, inner_x + inner_w);
                 p.draw_line(cx, r.y + 6.0, cx, r.y + r.h - 6.0, t.border_focus, 1.6);
             }
@@ -792,6 +956,8 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             }
         },
         ListView => {
+            let vis = intersect(r, clip);
+            guard vis.w > 0.0 && vis.h > 0.0 else { return; }
             let bg = if has_bg(w.style) { unpack_rgba(w.style.bg_rgba) } else { t.input_bg };
             let bd = if is_focused { t.border_focus } else { t.border };
             p.fill_rounded_rect(r.x, r.y, r.w, r.h, rad, bg);
@@ -802,34 +968,36 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             let row_w = if r.w > 8.0 + sb_w { r.w - 8.0 - sb_w } else { 0.0 };
             let top_y = r.y + 4.0;
             let bot_y = r.y + r.h - 4.0;
+            let cw = if r.w > 4.0 { r.w - 4.0 } else { 0.0 };
+            let ch_clip = if bot_y > top_y { bot_y - top_y } else { 0.0 };
 
-            let is_sw = match p.backend { Software => true, _ => false };
-            let is_gl = match p.backend { OpenGL => true, _ => false };
-            let has_clip = is_sw || is_gl;
             var saved_dc: i32 = 0;
-            if is_sw && p.hdc.is_valid() {
-                saved_dc = SaveDC(p.hdc.raw);
-                IntersectClipRect(
-                    p.hdc.raw,
-                    round_i32(p.ox + r.x + 2.0),
-                    round_i32(p.oy + top_y),
-                    round_i32(p.ox + r.x + r.w - 2.0),
-                    round_i32(p.oy + bot_y)
-                );
-            } else if is_gl {
-                p.gl2d.push_clip(p.ox + r.x + 2.0, p.oy + top_y, if r.w > 4.0 { r.w - 4.0 } else { 0.0 }, if bot_y > top_y { bot_y - top_y } else { 0.0 });
+            match p.backend {
+                Direct2D => {
+                    if p.d2d.is_valid() { p.d2d.push_clip(r.x + 2.0, top_y, cw, ch_clip); }
+                },
+                Software => {
+                    if p.hdc.is_valid() {
+                        saved_dc = SaveDC(p.hdc.raw);
+                        IntersectClipRect(
+                            p.hdc.raw,
+                            round_i32(p.ox + r.x + 2.0),
+                            round_i32(p.oy + top_y),
+                            round_i32(p.ox + r.x + r.w - 2.0),
+                            round_i32(p.oy + bot_y)
+                        );
+                    }
+                },
+                OpenGL => {
+                    if p.gl2d.is_valid() { p.gl2d.push_clip(p.ox + r.x + 2.0, p.oy + top_y, cw, ch_clip); }
+                },
             }
 
             var idx: i32 = 0;
             for i in app.list_items.len {
                 if app.list_items[i].alive && eq(app.list_items[i].owner, id) {
                     let iy = top_y + idx * ih - w.scroll_y;
-                    let visible_row = if has_clip {
-                        iy + ih > top_y && iy < bot_y
-                    } else {
-                        (iy >= top_y - 1.0 && iy + ih <= bot_y + 1.0) || (ih > bot_y - top_y && iy + ih > top_y && iy < bot_y)
-                    };
-                    if visible_row {
+                    if iy + ih > top_y && iy < bot_y {
                         let sel = idx == w.selected_index;
                         let hov = is_hovered && idx == w.hovered_item;
                         if sel {
@@ -852,10 +1020,10 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
                 }
             }
 
-            if saved_dc != 0 {
-                RestoreDC(p.hdc.raw, saved_dc);
-            } else if is_gl {
-                p.gl2d.pop_clip();
+            match p.backend {
+                Direct2D => { if p.d2d.is_valid() { p.d2d.pop_clip(); } },
+                Software => { if saved_dc != 0 { RestoreDC(p.hdc.raw, saved_dc); } },
+                OpenGL => { if p.gl2d.is_valid() { p.gl2d.pop_clip(); } },
             }
 
             if w.scroll_max_y > 0.0 {
@@ -941,18 +1109,18 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
 struct PaintFrame {
     id: WidgetId = WIDGET_NONE,
     clip: RectF = RectF {},
-    in_scroll: bool = false,
     saved_dc: i32 = 0,
     gl_clip: bool = false,
+    d2d_clip: bool = false,
     exit_phase: bool = false,
 }
 
 fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: WidgetId, p: const Painter&, full_clip: RectF) {
     let is_sw = match p.backend { Software => true, _ => false };
     let is_gl = match p.backend { OpenGL => true, _ => false };
-    let has_hw_clip = is_sw || is_gl;
+    let is_d2d = match p.backend { Direct2D => true, _ => false };
     var stack: PaintFrame[>..<] = [];
-    stack.push(PaintFrame { id: root_id, clip: full_clip, in_scroll: false, saved_dc: 0, gl_clip: false, exit_phase: false });
+    stack.push(PaintFrame { id: root_id, clip: full_clip });
 
     while stack.len > 0 {
         let fr = stack.pop();
@@ -962,6 +1130,8 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
                 RestoreDC(p.hdc.raw, fr.saved_dc);
             } else if fr.gl_clip {
                 p.gl2d.pop_clip();
+            } else if fr.d2d_clip {
+                p.d2d.pop_clip();
             }
             if app.valid_widget(id) {
                 match app.widgets[id.index].kind {
@@ -993,87 +1163,87 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
         }
 
         let is_scroll = match app.widgets[id.index].kind { ScrollArea => true, _ => false };
-        let has_children = app.valid_widget(app.widgets[id.index].first_child);
 
-        // On Direct2D (no hardware clip rect in win32-goose), skip leaf widgets that would bleed
-        // outside a ScrollArea unless the single leaf itself is taller than the viewport.
-        let draw_self = if !has_hw_clip && fr.in_scroll && !has_children {
-            (r.y >= clip.y - 2.0 && r.y + r.h <= clip.y + clip.h + 2.0) || r.h > clip.h
-        } else {
-            true
-        };
+        paint_single_widget(app, win_idx, id, p, clip);
 
-        if draw_self {
-            paint_single_widget(app, win_idx, id, p);
-
-            match app.widgets[id.index].kind {
-                Canvas => {
-                    if r.w > 2.0 && r.h > 2.0 {
-                        var cp = p;
-                        cp.width = r.w;
-                        cp.height = r.h;
-                        match p.backend {
-                            Direct2D => {
+        match app.widgets[id.index].kind {
+            Canvas => {
+                if r.w > 2.0 && r.h > 2.0 {
+                    var cp = p;
+                    cp.width = r.w;
+                    cp.height = r.h;
+                    match p.backend {
+                        Direct2D => {
+                            if p.d2d.is_valid() {
+                                p.d2d.push_clip(r.x, r.y, r.w, r.h);
                                 p.d2d.set_transform(1.0, 0.0, 0.0, 1.0, r.x, r.y);
                                 OnCanvas(id, cp);
                                 p.d2d.set_identity();
-                            },
-                            Software => {
-                                var csave: i32 = 0;
-                                if p.hdc.is_valid() {
-                                    csave = SaveDC(p.hdc.raw);
-                                    IntersectClipRect(
-                                        p.hdc.raw,
-                                        round_i32(p.ox + r.x),
-                                        round_i32(p.oy + r.y),
-                                        round_i32(p.ox + r.x + r.w),
-                                        round_i32(p.oy + r.y + r.h)
-                                    );
-                                }
-                                cp.ox = p.ox + r.x;
-                                cp.oy = p.oy + r.y;
-                                OnCanvas(id, cp);
-                                if csave != 0 {
-                                    RestoreDC(p.hdc.raw, csave);
-                                }
-                            },
-                            OpenGL => {
-                                p.gl2d.push_clip(p.ox + r.x, p.oy + r.y, r.w, r.h);
-                                cp.ox = p.ox + r.x;
-                                cp.oy = p.oy + r.y;
-                                OnCanvas(id, cp);
-                                p.gl2d.pop_clip();
-                            },
-                        }
+                                p.d2d.pop_clip();
+                            }
+                        },
+                        Software => {
+                            var csave: i32 = 0;
+                            if p.hdc.is_valid() {
+                                csave = SaveDC(p.hdc.raw);
+                                IntersectClipRect(
+                                    p.hdc.raw,
+                                    round_i32(p.ox + r.x),
+                                    round_i32(p.oy + r.y),
+                                    round_i32(p.ox + r.x + r.w),
+                                    round_i32(p.oy + r.y + r.h)
+                                );
+                            }
+                            cp.ox = p.ox + r.x;
+                            cp.oy = p.oy + r.y;
+                            OnCanvas(id, cp);
+                            if csave != 0 {
+                                RestoreDC(p.hdc.raw, csave);
+                            }
+                        },
+                        OpenGL => {
+                            p.gl2d.push_clip(p.ox + r.x, p.oy + r.y, r.w, r.h);
+                            cp.ox = p.ox + r.x;
+                            cp.oy = p.oy + r.y;
+                            OnCanvas(id, cp);
+                            p.gl2d.pop_clip();
+                        },
                     }
-                },
-                _ => {},
-            }
+                }
+            },
+            _ => {},
         }
 
         let next_clip = if is_scroll { intersect(clip, r) } else { clip };
-        let child_in_scroll = fr.in_scroll || is_scroll;
 
         var saved_dc: i32 = 0;
         var gl_clip = false;
-        if is_scroll && is_sw && p.hdc.is_valid() {
-            saved_dc = SaveDC(p.hdc.raw);
-            IntersectClipRect(
-                p.hdc.raw,
-                round_i32(p.ox + next_clip.x + 1.0),
-                round_i32(p.oy + next_clip.y + 1.0),
-                round_i32(p.ox + next_clip.x + next_clip.w - 1.0),
-                round_i32(p.oy + next_clip.y + next_clip.h - 1.0)
-            );
-        } else if is_scroll && is_gl {
-            let cw = if next_clip.w > 2.0 { next_clip.w - 2.0 } else { 0.0 };
-            let ch_h = if next_clip.h > 2.0 { next_clip.h - 2.0 } else { 0.0 };
-            p.gl2d.push_clip(p.ox + next_clip.x + 1.0, p.oy + next_clip.y + 1.0, cw, ch_h);
-            gl_clip = true;
+        var d2d_clip = false;
+        if is_scroll {
+            if is_sw && p.hdc.is_valid() {
+                saved_dc = SaveDC(p.hdc.raw);
+                IntersectClipRect(
+                    p.hdc.raw,
+                    round_i32(p.ox + next_clip.x + 1.0),
+                    round_i32(p.oy + next_clip.y + 1.0),
+                    round_i32(p.ox + next_clip.x + next_clip.w - 1.0),
+                    round_i32(p.oy + next_clip.y + next_clip.h - 1.0)
+                );
+            } else if is_gl {
+                let cw = if next_clip.w > 2.0 { next_clip.w - 2.0 } else { 0.0 };
+                let ch_h = if next_clip.h > 2.0 { next_clip.h - 2.0 } else { 0.0 };
+                p.gl2d.push_clip(p.ox + next_clip.x + 1.0, p.oy + next_clip.y + 1.0, cw, ch_h);
+                gl_clip = true;
+            } else if is_d2d && p.d2d.is_valid() {
+                let cw = if next_clip.w > 2.0 { next_clip.w - 2.0 } else { 0.0 };
+                let ch_h = if next_clip.h > 2.0 { next_clip.h - 2.0 } else { 0.0 };
+                p.d2d.push_clip(next_clip.x + 1.0, next_clip.y + 1.0, cw, ch_h);
+                d2d_clip = true;
+            }
         }
 
-        if is_scroll || saved_dc != 0 || gl_clip {
-            stack.push(PaintFrame { id: id, clip: next_clip, in_scroll: child_in_scroll, saved_dc: saved_dc, gl_clip: gl_clip, exit_phase: true });
+        if is_scroll || saved_dc != 0 || gl_clip || d2d_clip {
+            stack.push(PaintFrame { id: id, clip: next_clip, saved_dc: saved_dc, gl_clip: gl_clip, d2d_clip: d2d_clip, exit_phase: true });
         }
 
         // Push children in reverse order so first_child is popped and painted first.
@@ -1081,7 +1251,7 @@ fn paint_widget_tree_with<OnCanvas>(app: const App&, win_idx: i32, root_id: Widg
         while app.valid_widget(ch) {
             let cr = app.widgets[ch.index].rect;
             if cr.w > 0.0 && cr.h > 0.0 && cr.y + cr.h > next_clip.y && cr.y < next_clip.y + next_clip.h {
-                stack.push(PaintFrame { id: ch, clip: next_clip, in_scroll: child_in_scroll, saved_dc: 0, gl_clip: false, exit_phase: false });
+                stack.push(PaintFrame { id: ch, clip: next_clip });
             }
             ch = app.widgets[ch.index].prev_sibling;
         }
@@ -1188,6 +1358,11 @@ fn render_window_with<OnCanvas>(app: App&, win: WindowId) {
         gl2d: app.windows[win.index].gl2d,
         gl2d_fonts: app.windows[win.index].gl2d_fonts,
         gdi_fonts: app.windows[win.index].gdi_fonts,
+        metric_dc: app.windows[win.index].metric_dc,
+        metric_fonts: match backend {
+            Software => app.windows[win.index].gdi_fonts,
+            _ => app.windows[win.index].metric_fonts,
+        },
         theme: app.theme,
         width: ww,
         height: wh,
@@ -1220,7 +1395,7 @@ fn render_window_with<OnCanvas>(app: App&, win: WindowId) {
 
     let sb = app.windows[win.index].status_bar;
     if app.valid_widget(sb) && app.widgets[sb.index].visible {
-        paint_single_widget(app, win.index, sb, p);
+        paint_single_widget(app, win.index, sb, p, full_clip);
     }
 
     paint_overlays(app, win.index, p);

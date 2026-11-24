@@ -69,7 +69,10 @@ u.padding(16.0).spacing(10.0).bg(goose_ui::color_hex(0x1E222F)).radius(8.0);
 ```
 
 Available `Ui` methods:
-`padding`, `padding_m`, `spacing`, `stretch`, `fixed`, `width`, `height`, `min_size`, `bg`, `border`, `radius`, `action`, `name`, `bind`, `layout_kind`, `self_node`, `id`.
+`padding`, `padding_m`, `spacing`, `stretch`, `fixed`, `width`, `height`, `min_size`, `bg`, `border`, `radius`, `action`, `name`, `bind`, `layout_kind`, `form_label_width`, `self_node`, `id`.
+
+Translated `Ui` builders (auto-retranslate when `app.set_locale(...)` switches languages):
+`tr_label`, `tr_button`, `tr_checkbox`, `tr_radio`, `tr_toggle`, `tr_line_edit`, `tr_group_box`, `tr_tab`.
 
 ---
 

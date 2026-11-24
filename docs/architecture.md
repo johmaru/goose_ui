@@ -20,7 +20,8 @@ root struct App
  ├── signals:      Signal[>..]      // Per-frame signal queue
  ├── focus_order:  WidgetId[>..<]   // Cached Tab traversal order
  ├── log:           LogState         // Optional user-path JSON logger state
- └── log_path_span: StrSpan          // Pooled path in App.str_pool (0 bytes when unused)
+ ├── log_path_span: StrSpan          // Pooled path in App.str_pool (0 bytes when unused)
+ └── i18n_*         I18n tables      // Translation pool, locales, O(1) hash entries & sparse live bindings
 ```
 
 ### Generational Handles (`WindowId`, `WidgetId`)
@@ -57,9 +58,9 @@ Combined, the measured incremental memory cost is **~350 bytes per widget** (~8.
 | --- | --- | --- |
 | Rendering API | Double-buffered Win32 GDI (`begin_paint` / `end_paint`) + ClearType `CreateFontA` | Direct2D (`ID2D1HwndRenderTarget`) + DirectWrite |
 | Startup Footprint | **Never loads `d2d1` / `d3d11`** (avoids ~56 MB GPU driver baseline) | Initializes GPU device & swap chain |
-| Font Cache | 6 `HFONT` handles per window (`GdiFontSet`) | 6 `IDWriteTextFormat` handles per window (`FontSet`, fitting `W32_MAX_D2D_FONTS = 64`) with dynamic `set_align` |
-| Clipping | Hardware GDI `SaveDC` / `IntersectClipRect` / `RestoreDC` | Bounding-box culling per viewport |
-| `Canvas` Coordinates | Software translation via `Painter.ox / oy` + clip rect | GPU translation via `d2d.set_transform` |
+| Font Cache | 6 `HFONT` handles per window (`GdiFontSet`) | 6 `IDWriteTextFormat` handles per window (`FontSet`, fitting `W32_MAX_D2D_FONTS = 64`) with `set_word_wrap(false)`, `set_align`, and exact DirectWrite `measure_text` |
+| Clipping | Hardware GDI `SaveDC` / `IntersectClipRect` / `RestoreDC` | Hardware `PushAxisAlignedClip` / `PopAxisAlignedClip` (`d2d.push_clip` / `pop_clip`) + `D2D1_DRAW_TEXT_OPTIONS_CLIP` |
+| `Canvas` Coordinates | Software translation via `Painter.ox / oy` + clip rect | GPU `d2d.push_clip` + translation via `d2d.set_transform` |
 | Translucency | Pre-composited onto `theme.surface_bg` (`gdi_colorref`) | Hardware alpha blending |
 
 ---
@@ -101,11 +102,12 @@ goose_ui.goose (public entry point)
  ├── types.goose    (geometry, handles, enums, Signal, ANCHOR_*)
  ├── theme.goose    (Theme, packed WidgetStyle, UTF-8 text metrics)
  ├── widget.goose   (Widget, Window, ListItem, TimerInfo, root struct App)
- ├── tree.goose     (lifecycle, str_pool, font caches, add_*/set_*, connect)
+ ├── tree.goose     (lifecycle, window positioning, str_pool, font caches, add_*/set_*, connect)
  ├── log.goose      (structured JSON logging, rotation, JsonLogger, log reader)
  ├── layout.goose   (two-pass layout engine & Anchor absolute positioning)
  ├── painter.goose  (Software GDI / Direct2D dual painter & widget renderers)
  ├── events.goose   (hit testing, focus, input editing, event loop, inject_*)
  ├── native.goose   (Win32 menus, dialogs, clipboard, timers, drag & drop)
- └── dsl.goose      (scoped nested DSL: Ui / Node)
+ ├── i18n.goose     (zero-heap multi-language catalogs, JSON loaders, live bindings)
+ └── dsl.goose      (scoped nested DSL: Ui / Node & .tr_* builders)
 ```

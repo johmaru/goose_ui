@@ -6,7 +6,7 @@ This repository contains **`goose_ui`**, a **retained-mode, zero-heap GUI framew
 
 ## 1. Architecture & Invariants
 
-- **Do not modify the submodule**: Never edit files under `win32-goose/` directly, and keep `goose_ui` pure Goose with no extra C files.
+- **Fix root causes in `win32-goose/` when needed**: Keep `goose_ui` itself pure Goose with no extra C files under `goose_ui/`. However, when a bug or missing low-level Win32/Direct2D/OpenGL primitive originates in the `win32-goose/` submodule, **fix or add it directly in `win32-goose/`** rather than relying on fragile workarounds in `goose_ui/`, and run `win32-goose/test/win32_test.goose` (`goose run --debug` and native `goose build`) alongside `goose_ui`'s test suite.
 - **Package config (`goose_ui.build`)**: Keep `main_thread_only = true;` and `exclude = ["win32-goose", "examples", "test", "bench"];`.
 - **Root file import convention**: External entry files (`examples/`, `test/`, `bench/`, user apps) must explicitly import both transitive and direct packages:
   ```goose
@@ -28,8 +28,9 @@ This repository contains **`goose_ui`**, a **retained-mode, zero-heap GUI framew
   - **Never call `d2d_create`** on this path so the ~56 MB GPU driver baseline is avoided (~9.2 MB empty window, ~11.3 MB at 5,000 controls, ~36 ms first paint).
   - Fonts are created via `gdi32` `CreateFontA` (`CLEARTYPE_QUALITY = 5`), text uses `DT_NOPREFIX`, and scroll/canvas regions use `SaveDC` / `IntersectClipRect` / `RestoreDC`.
 - **`RenderBackend.Direct2D` (Direct2D + DirectWrite GPU)**:
-  - `win32-goose` caps global D2D fonts at `W32_MAX_D2D_FONTS = 64`; stay at 6 fonts per window (`FontSet`) and switch alignment via `set_align` right before `draw_text`.
-- **Backend parity**: Keep `Painter` primitives and `Canvas` local coordinate translation (`set_transform` in D2D, `ox`/`oy` + clip rect in GDI) consistent across both backends.
+  - `win32-goose` caps global D2D fonts at `W32_MAX_D2D_FONTS = 64`; stay at 6 fonts per window (`FontSet`), disable DirectWrite word wrapping (`set_word_wrap(false)`) for single-line controls (paired with `D2D1_DRAW_TEXT_OPTIONS_CLIP` in `win32-goose`), switch alignment via `set_align` right before `draw_text`, and measure text directly with `d2d.measure_text`.
+  - Hardware clipping uses `d2d.push_clip` / `d2d.pop_clip` (`PushAxisAlignedClip` / `PopAxisAlignedClip`) for `ScrollArea`, `ListView`, and `Canvas`.
+- **Backend parity**: Keep `Painter` primitives, hardware clip stacks (`d2d.push_clip` in D2D, `SaveDC`/`IntersectClipRect` in GDI, `gl2d.push_clip` in OpenGL), and `Canvas` local coordinate translation consistent across all backends.
 
 ---
 

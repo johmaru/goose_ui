@@ -30,6 +30,9 @@ extern "gdi32" {
         pitch_family: u32,
         face: const u8&
     ) -> u64;
+    fn CreateCompatibleDC(hdc: u64) -> u64;
+    fn DeleteDC(hdc: u64) -> i32;
+    fn GetTextExtentPoint32W(hdc: u64, text: const u16&, count: i32, size: win32::Size&) -> i32;
 }
 
 // --- Inline & Pooled String Helpers -----------------------------------------
@@ -112,6 +115,60 @@ fn set_backend(app: App&, backend: RenderBackend) {
     app.backend = backend;
 }
 
+fn window_position_code(pos: WindowPosition) -> i32 {
+    return match pos {
+        SystemDefault => WIN_POS_DEFAULT,
+        CenterPrimary => WIN_POS_CENTER_PRIMARY,
+        CenterMonitor => WIN_POS_CENTER_MONITOR,
+        Manual => WIN_POS_MANUAL,
+    };
+}
+
+fn window_position_from_code(code: i32) -> WindowPosition {
+    if code == WIN_POS_CENTER_PRIMARY { return WindowPosition.CenterPrimary; }
+    if code == WIN_POS_CENTER_MONITOR { return WindowPosition.CenterMonitor; }
+    if code == WIN_POS_MANUAL { return WindowPosition.Manual; }
+    return WindowPosition.SystemDefault;
+}
+
+// Configures default startup placement for windows created by this App.
+fn set_window_start_position(app: App&, pos: WindowPosition) {
+    app.window_pos_mode = window_position_code(pos);
+}
+
+fn window_start_position(app: const App&) -> WindowPosition {
+    return window_position_from_code(app.window_pos_mode);
+}
+
+// Configures explicit top-left screen coordinates for newly created windows.
+fn set_window_start_position_manual(app: App&, x: i32, y: i32) {
+    app.window_pos_mode = WIN_POS_MANUAL;
+    app.window_pos_x = x;
+    app.window_pos_y = y;
+}
+
+// Configures newly created windows to center inside a specific monitor's work area.
+fn set_window_start_monitor(app: App&, monitor_index: i32) {
+    app.window_pos_mode = WIN_POS_CENTER_MONITOR;
+    app.window_pos_monitor = monitor_index;
+}
+
+// Shorthand to toggle centering newly created windows on the primary display.
+fn set_center_on_primary_display(app: App&, enabled: bool = true) {
+    app.window_pos_mode = if enabled { WIN_POS_CENTER_PRIMARY } else { WIN_POS_DEFAULT };
+}
+
+fn select_font(fonts: const FontSet&, role: FontRole) -> win32::D2dFont {
+    return match role {
+        Body => fonts.body,
+        BodyBold => fonts.body_bold,
+        Heading => fonts.heading,
+        Subheading => fonts.subheading,
+        Caption => fonts.caption,
+        Mono => fonts.mono,
+    };
+}
+
 fn create_window_fonts(d2d: win32::D2dTarget, t: const Theme&) -> FontSet {
     var fs = FontSet {};
     guard d2d.is_valid() else { return fs; }
@@ -121,6 +178,12 @@ fn create_window_fonts(d2d: win32::D2dTarget, t: const Theme&) -> FontSet {
     fs.subheading = d2d.create_font("Segoe UI", t.font_size_subheading, 600, false);
     fs.caption = d2d.create_font("Segoe UI", t.font_size_caption, 400, false);
     fs.mono = d2d.create_font("Consolas", t.font_size_mono, 400, false);
+    if fs.body.is_valid() { fs.body.set_word_wrap(false); }
+    if fs.body_bold.is_valid() { fs.body_bold.set_word_wrap(false); }
+    if fs.heading.is_valid() { fs.heading.set_word_wrap(false); }
+    if fs.subheading.is_valid() { fs.subheading.set_word_wrap(false); }
+    if fs.caption.is_valid() { fs.caption.set_word_wrap(false); }
+    if fs.mono.is_valid() { fs.mono.set_word_wrap(false); }
     return fs;
 }
 
@@ -134,24 +197,32 @@ fn destroy_window_fonts(fs: FontSet&) {
     fs = FontSet {};
 }
 
-fn make_gdi_font(px_size: f32, weight: i32, face_nul: const u8[:]) -> win32::Hfont {
+fn make_gdi_font_scaled(px_size: f32, scale: f32, weight: i32, face_nul: const u8[:]) -> win32::Hfont {
     // Negative cHeight specifies character height in device pixels; quality 5 = CLEARTYPE_QUALITY.
-    let h = -((px_size * 1.15 + 0.5) as! i32);
+    let h = -((px_size * scale + 0.5) as! i32);
     let raw = CreateFontA(h, 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5, 0, face_nul[0]);
     return win32::Hfont { raw: raw };
 }
 
-fn create_gdi_fonts(t: const Theme&) -> GdiFontSet {
+fn make_gdi_font(px_size: f32, weight: i32, face_nul: const u8[:]) -> win32::Hfont {
+    return make_gdi_font_scaled(px_size, 1.15, weight, face_nul);
+}
+
+fn create_gdi_fonts_scaled(t: const Theme&, scale: f32) -> GdiFontSet {
     let segoe: const u8[:] = "Segoe UI\0";
     let consolas: const u8[:] = "Consolas\0";
     return GdiFontSet {
-        body: make_gdi_font(t.font_size_body, 400, segoe),
-        body_bold: make_gdi_font(t.font_size_body, 600, segoe),
-        heading: make_gdi_font(t.font_size_heading, 600, segoe),
-        subheading: make_gdi_font(t.font_size_subheading, 600, segoe),
-        caption: make_gdi_font(t.font_size_caption, 400, segoe),
-        mono: make_gdi_font(t.font_size_mono, 400, consolas),
+        body: make_gdi_font_scaled(t.font_size_body, scale, 400, segoe),
+        body_bold: make_gdi_font_scaled(t.font_size_body, scale, 600, segoe),
+        heading: make_gdi_font_scaled(t.font_size_heading, scale, 600, segoe),
+        subheading: make_gdi_font_scaled(t.font_size_subheading, scale, 600, segoe),
+        caption: make_gdi_font_scaled(t.font_size_caption, scale, 400, segoe),
+        mono: make_gdi_font_scaled(t.font_size_mono, scale, 400, consolas),
     };
+}
+
+fn create_gdi_fonts(t: const Theme&) -> GdiFontSet {
+    return create_gdi_fonts_scaled(t, 1.15);
 }
 
 fn destroy_gdi_font(f: win32::Hfont) {
@@ -166,6 +237,260 @@ fn destroy_gdi_fonts(fs: GdiFontSet&) {
     destroy_gdi_font(fs.caption);
     destroy_gdi_font(fs.mono);
     fs = GdiFontSet {};
+}
+
+fn select_metric_hfont(fonts: const GdiFontSet&, role: FontRole) -> win32::Hfont {
+    return match role {
+        Body => fonts.body,
+        BodyBold => fonts.body_bold,
+        Heading => fonts.heading,
+        Subheading => fonts.subheading,
+        Caption => fonts.caption,
+        Mono => fonts.mono,
+    };
+}
+
+fn measure_gdi_text_width(dc: win32::Hdc, font: win32::Hfont, text: const u8[:]) -> f32 {
+    guard text.len > 0 && dc.is_valid() && font.is_valid() else { return 0.0; }
+    var wbuf: u16[>..] = [];
+    win32::utf8_to_utf16z(text, wbuf);
+    let wlen = (wbuf.len - 1) as! i32;
+    guard wlen > 0 else { return 0.0; }
+    let old = win32::SelectObject(dc.raw, font.raw);
+    var sz = win32::Size {};
+    let ok = GetTextExtentPoint32W(dc.raw, wbuf[0], wlen, sz);
+    if old != 0 { win32::SelectObject(dc.raw, old); }
+    if ok != 0 {
+        let w: f32 = sz.cx;
+        return w;
+    }
+    return 0.0;
+}
+
+fn has_native_text_metrics(app: const App&, win_idx: i32) -> bool {
+    guard win_idx >= 0 && win_idx < app.windows.len else { return false; }
+    guard app.windows[win_idx].alive && !app.windows[win_idx].headless else { return false; }
+    return match app.windows[win_idx].backend {
+        Direct2D => app.windows[win_idx].d2d.is_valid(),
+        Software, OpenGL => app.windows[win_idx].metric_dc.is_valid(),
+    };
+}
+
+fn win_metric_hfont(app: const App&, win_idx: i32, role: FontRole) -> win32::Hfont {
+    return match app.windows[win_idx].backend {
+        Software => select_metric_hfont(app.windows[win_idx].gdi_fonts, role),
+        _ => select_metric_hfont(app.windows[win_idx].metric_fonts, role),
+    };
+}
+
+fn measure_win_text_width(app: const App&, win_idx: i32, text: const u8[:], role: FontRole) -> f32 {
+    if text.len == 0 { return 0.0; }
+    if win_idx >= 0 && win_idx < app.windows.len && app.windows[win_idx].alive && !app.windows[win_idx].headless {
+        match app.windows[win_idx].backend {
+            Direct2D => {
+                if app.windows[win_idx].d2d.is_valid() {
+                    let df = select_font(app.windows[win_idx].fonts, role);
+                    if df.is_valid() {
+                        let w, _h = app.windows[win_idx].d2d.measure_text(text, df);
+                        return w;
+                    }
+                }
+            },
+            Software, OpenGL => {
+                if app.windows[win_idx].metric_dc.is_valid() {
+                    let hf = win_metric_hfont(app, win_idx, role);
+                    if hf.is_valid() {
+                        return measure_gdi_text_width(app.windows[win_idx].metric_dc, hf, text);
+                    }
+                }
+            },
+        }
+    }
+    return measure_text_width_role(text, app.theme, role);
+}
+
+fn collect_utf8_boundaries(text: const u8[:], out: i32[>..]&) {
+    out.clear();
+    out.push(0);
+    var i: i64 = 0;
+    while i < text.len {
+        let b0 = text[i];
+        var step: i64 = 1;
+        if b0 >= 0xF0 && i + 3 < text.len { step = 4; }
+        else if b0 >= 0xE0 && i + 2 < text.len { step = 3; }
+        else if b0 >= 0xC0 && i + 1 < text.len { step = 2; }
+        i += step;
+        out.push(i as! i32);
+    }
+}
+
+fn line_edit_slice_width(
+    app: const App&,
+    win_idx: i32,
+    text: const u8[:],
+    start_byte: i32,
+    end_byte: i32,
+    role: FontRole,
+    password_mode: bool
+) -> f32 {
+    let n = text.len as! i32;
+    let lo = if start_byte < 0 { 0 } else if start_byte > n { n } else { start_byte };
+    let hi = if end_byte < 0 { 0 } else if end_byte > n { n } else { end_byte };
+    if hi <= lo { return 0.0; }
+    if password_mode {
+        var chars: i32 = 0;
+        for i in lo..hi {
+            if (text[i] & 0xC0) != 0x80 { chars += 1; }
+        }
+        if !has_native_text_metrics(app, win_idx) {
+            let fsz = font_size_for_role(app.theme, role);
+            let is_mono = match role { Mono => true, _ => false };
+            return chars * password_char_width(fsz, is_mono);
+        }
+        var stars: u8[>..] = [];
+        for _ in 0..chars { stars.push('*'); }
+        return measure_win_text_width(app, win_idx, stars, role);
+    }
+    return measure_win_text_width(app, win_idx, text[lo..hi], role);
+}
+
+fn fit_line_edit_end(
+    app: const App&,
+    win_idx: i32,
+    text: const u8[:],
+    start_byte: i32,
+    max_w: f32,
+    role: FontRole,
+    password_mode: bool
+) -> i32 {
+    let n = text.len as! i32;
+    let sb = utf8_snap_boundary(text, start_byte);
+    if max_w <= 0.0 || sb >= n { return sb; }
+    if line_edit_slice_width(app, win_idx, text, sb, n, role, password_mode) <= max_w {
+        return n;
+    }
+    var bounds: i32[>..] = [];
+    collect_utf8_boundaries(text[sb..], bounds);
+    var lo: i64 = 0;
+    var hi: i64 = bounds.len - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if line_edit_slice_width(app, win_idx, text, sb, sb + bounds[mid], role, password_mode) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return sb + bounds[lo];
+}
+
+fn caret_byte_from_x_line_edit(
+    app: const App&,
+    win_idx: i32,
+    id: WidgetId,
+    vis_start: i32,
+    rel_x: f32
+) -> i32 {
+    guard app.valid_widget(id) else { return 0; }
+    let text = app.str_view(app.widgets[id.index].text);
+    let role = app.widgets[id.index].font_role;
+    let pw = app.widgets[id.index].password_mode;
+    let n = text.len as! i32;
+    let vs = utf8_snap_boundary(text, vis_start);
+    if rel_x <= 0.0 || vs >= n { return vs; }
+
+    var bounds: i32[>..] = [];
+    collect_utf8_boundaries(text[vs..], bounds);
+    if bounds.len <= 1 { return vs; }
+
+    var lo: i64 = 0;
+    var hi: i64 = bounds.len - 1;
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if line_edit_slice_width(app, win_idx, text, vs, vs + bounds[mid], role, pw) <= rel_x {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo + 1 < bounds.len {
+        let w0 = line_edit_slice_width(app, win_idx, text, vs, vs + bounds[lo], role, pw);
+        let w1 = line_edit_slice_width(app, win_idx, text, vs, vs + bounds[lo + 1], role, pw);
+        if rel_x >= (w0 + w1) * 0.5 {
+            return vs + bounds[lo + 1];
+        }
+    }
+    return vs + bounds[lo];
+}
+
+fn ensure_line_edit_caret_visible(app: App&, id: WidgetId) {
+    guard app.valid_widget(id) else { return; }
+    let is_le = match app.widgets[id.index].kind { LineEdit => true, _ => false };
+    guard is_le else { return; }
+    let win = app.widgets[id.index].window;
+    guard app.valid_window(win) else { return; }
+
+    let r = app.widgets[id.index].rect;
+    let inner_w = if r.w > 18.0 { r.w - 18.0 } else { 0.0 };
+    if inner_w <= 4.0 { return; }
+
+    let win_idx = win.index;
+    var vis_start: i32 = 0;
+    var scroll_x: f32 = 0.0;
+    {
+        let text = app.str_view(app.widgets[id.index].text);
+        let role = app.widgets[id.index].font_role;
+        let pw = app.widgets[id.index].password_mode;
+        let n = text.len as! i32;
+        let caret = utf8_snap_boundary(text, app.widgets[id.index].caret);
+        app.widgets[id.index].caret = caret;
+
+        if n == 0 {
+            app.widgets[id.index].text_scroll_byte = 0;
+            app.widgets[id.index].text_scroll_x = 0.0;
+            return;
+        }
+
+        let budget = if inner_w > 2.0 { inner_w - 2.0 } else { inner_w };
+        vis_start = utf8_snap_boundary(text, app.widgets[id.index].text_scroll_byte);
+        if caret < vis_start {
+            vis_start = caret;
+        } else if line_edit_slice_width(app, win_idx, text, vis_start, caret, role, pw) > budget {
+            var b: i32[>..] = [];
+            collect_utf8_boundaries(text[..caret], b);
+            var lo: i64 = 0;
+            var hi: i64 = b.len - 1;
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if line_edit_slice_width(app, win_idx, text, b[mid], caret, role, pw) <= budget {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            vis_start = b[lo];
+        }
+
+        if vis_start > 0 && line_edit_slice_width(app, win_idx, text, vis_start, n, role, pw) < budget {
+            var b2: i32[>..] = [];
+            collect_utf8_boundaries(text[..vis_start], b2);
+            var lo2: i64 = 0;
+            var hi2: i64 = b2.len - 1;
+            while lo2 < hi2 {
+                let mid = lo2 + (hi2 - lo2) / 2;
+                if line_edit_slice_width(app, win_idx, text, b2[mid], n, role, pw) <= budget {
+                    hi2 = mid;
+                } else {
+                    lo2 = mid + 1;
+                }
+            }
+            vis_start = b2[lo2];
+        }
+
+        scroll_x = line_edit_slice_width(app, win_idx, text, 0, vis_start, role, pw);
+    }
+    app.widgets[id.index].text_scroll_byte = vis_start;
+    app.widgets[id.index].text_scroll_x = scroll_x;
 }
 
 fn create_gl2d_fonts(gl2d: win32::Gl2dTarget, t: const Theme&) -> Gl2dFontSet {
@@ -208,6 +533,8 @@ fn set_theme(app: App&, t: Theme) {
                     OpenGL => {
                         destroy_gl2d_fonts(app.windows[i].gl2d_fonts);
                         app.windows[i].gl2d_fonts = create_gl2d_fonts(app.windows[i].gl2d, app.theme);
+                        destroy_gdi_fonts(app.windows[i].metric_fonts);
+                        app.windows[i].metric_fonts = create_gdi_fonts_scaled(app.theme, 1.15);
                         if app.windows[i].gl2d.is_valid() {
                             app.windows[i].gl2d.clear_text_cache();
                         }
@@ -484,6 +811,90 @@ fn compact_connections(app: App&) {
     app.connections.resize(write);
 }
 
+fn compact_i18n_bindings(app: App&, force: bool = false) {
+    let n = app.i18n_bindings.len;
+    if n == 0 { return; }
+    var alive_cnt: i64 = 0;
+    for i in n {
+        if app.i18n_bindings[i].alive { alive_cnt += 1; }
+    }
+    let dead_cnt = n - alive_cnt;
+    if dead_cnt == 0 { return; }
+    if !force && dead_cnt < 32 && dead_cnt * 2 < n {
+        var new_len = n;
+        while new_len > 0 && !app.i18n_bindings[new_len - 1].alive {
+            new_len -= 1;
+        }
+        if new_len < n {
+            app.i18n_bindings.resize(new_len);
+        }
+        return;
+    }
+    var write: i64 = 0;
+    for i in n {
+        if app.i18n_bindings[i].alive {
+            if write != i {
+                app.i18n_bindings[write] = app.i18n_bindings[i];
+            }
+            write += 1;
+        }
+    }
+    app.i18n_bindings.resize(write);
+}
+
+fn detach_widget_i18n_binding(app: App&, id: WidgetId, target_kind: u8) {
+    if app.i18n_bindings.len == 0 { return; }
+    var removed = false;
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive && app.i18n_bindings[i].target_kind == target_kind && eq(app.i18n_bindings[i].widget, id) {
+            app.i18n_bindings[i].alive = false;
+            removed = true;
+        }
+    }
+    if removed { compact_i18n_bindings(app); }
+}
+
+fn detach_window_i18n_binding(app: App&, win: WindowId, target_kind: u8) {
+    if app.i18n_bindings.len == 0 { return; }
+    var removed = false;
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive && app.i18n_bindings[i].target_kind == target_kind && eq(app.i18n_bindings[i].window, win) {
+            app.i18n_bindings[i].alive = false;
+            removed = true;
+        }
+    }
+    if removed { compact_i18n_bindings(app); }
+}
+
+fn detach_item_i18n_binding(app: App&, owner: WidgetId, item_uid: u64, target_kind: u8) {
+    if app.i18n_bindings.len == 0 || item_uid == 0 { return; }
+    var removed = false;
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive &&
+           app.i18n_bindings[i].target_kind == target_kind &&
+           app.i18n_bindings[i].item_uid == item_uid &&
+           eq(app.i18n_bindings[i].widget, owner) {
+            app.i18n_bindings[i].alive = false;
+            removed = true;
+        }
+    }
+    if removed { compact_i18n_bindings(app); }
+}
+
+fn detach_all_item_i18n_bindings(app: App&, owner: WidgetId, item_uid: u64) {
+    if app.i18n_bindings.len == 0 || item_uid == 0 { return; }
+    var removed = false;
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive &&
+           app.i18n_bindings[i].item_uid == item_uid &&
+           eq(app.i18n_bindings[i].widget, owner) {
+            app.i18n_bindings[i].alive = false;
+            removed = true;
+        }
+    }
+    if removed { compact_i18n_bindings(app); }
+}
+
 recursive fn destroy_widget_subtree(app: App&, id: WidgetId) {
     guard app.valid_widget(id) else { return; }
 
@@ -533,6 +944,11 @@ recursive fn destroy_widget_subtree(app: App&, id: WidgetId) {
             app.connections[i].alive = false;
         }
     }
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive && eq(app.i18n_bindings[i].widget, id) {
+            app.i18n_bindings[i].alive = false;
+        }
+    }
 
     app.widgets[id.index].alive = false;
     app.free_widgets.push(id.index);
@@ -546,6 +962,7 @@ fn destroy_widget(app: App&, id: WidgetId) {
     destroy_widget_subtree(app, id);
     compact_list_items(app);
     compact_connections(app);
+    compact_i18n_bindings(app);
     // Keep TabWidget selected_index in bounds if a tab page was destroyed directly.
     if app.valid_widget(parent) {
         match app.widgets[parent.index].kind {
@@ -564,6 +981,78 @@ fn destroy_widget(app: App&, id: WidgetId) {
 }
 
 // --- Window Creation & Destruction ------------------------------------------
+
+fn monitor_info_work_rect(mi: const win32::MonitorInfo&) -> win32::Rect {
+    if mi.work_right > mi.work_left && mi.work_bottom > mi.work_top {
+        return win32::Rect {
+            left: mi.work_left,
+            top: mi.work_top,
+            right: mi.work_right,
+            bottom: mi.work_bottom,
+        };
+    }
+    return win32::Rect {
+        left: mi.left,
+        top: mi.top,
+        right: mi.right,
+        bottom: mi.bottom,
+    };
+}
+
+// Returns the work area (excluding taskbar) of the primary/main display monitor.
+fn primary_work_area() -> win32::Rect {
+    let count = win32::monitor_count();
+    var dev: u8[>..] = [];
+    var fallback = win32::Rect {};
+    var has_fallback = false;
+    for i in 0..count {
+        var mi = win32::MonitorInfo {};
+        dev.clear();
+        if win32::monitor_info(i, mi, dev) {
+            let wr = monitor_info_work_rect(mi);
+            if !has_fallback {
+                fallback = wr;
+                has_fallback = true;
+            }
+            if mi.is_primary {
+                return wr;
+            }
+        }
+    }
+    if has_fallback { return fallback; }
+    let sw = win32::GetSystemMetrics(win32::SM_CXSCREEN);
+    let sh = win32::GetSystemMetrics(win32::SM_CYSCREEN);
+    if sw > 0 && sh > 0 {
+        return win32::Rect { left: 0, top: 0, right: sw, bottom: sh };
+    }
+    return win32::Rect { left: 0, top: 0, right: 1920, bottom: 1080 };
+}
+
+// Returns the work area (excluding taskbar) of monitor `monitor_index`, falling back to primary.
+fn monitor_work_area(monitor_index: i32) -> win32::Rect {
+    if monitor_index >= 0 {
+        let count = win32::monitor_count();
+        if monitor_index < count {
+            var mi = win32::MonitorInfo {};
+            var dev: u8[>..] = [];
+            if win32::monitor_info(monitor_index, mi, dev) {
+                return monitor_info_work_rect(mi);
+            }
+        }
+    }
+    return primary_work_area();
+}
+
+// Computes top-left coordinates centering `(win_w, win_h)` inside `work`, clamped to `work.left`/`work.top`.
+fn compute_centered_pos(work: win32::Rect, win_w: i32, win_h: i32) -> i32, i32 {
+    let avail_w = work.width();
+    let avail_h = work.height();
+    var x = work.left + (avail_w - win_w) / 2;
+    var y = work.top + (avail_h - win_h) / 2;
+    if x < work.left { x = work.left; }
+    if y < work.top { y = work.top; }
+    return x, y;
+}
 
 fn alloc_window_slot(app: App&) -> WindowId {
     for i in app.windows.len {
@@ -596,17 +1085,57 @@ fn create_window_with_backend(
         win32::WS_OVERLAPPED | win32::WS_CAPTION | win32::WS_SYSMENU | win32::WS_MINIMIZEBOX
     };
 
-    let hwnd = win32::create_window(title, width, height, style);
+    var init_x = win32::CW_USEDEFAULT;
+    var init_y = win32::CW_USEDEFAULT;
+    if app.window_pos_mode == WIN_POS_CENTER_PRIMARY || app.window_pos_mode == WIN_POS_CENTER_MONITOR {
+        let work = if app.window_pos_mode == WIN_POS_CENTER_MONITOR {
+            monitor_work_area(app.window_pos_monitor)
+        } else {
+            primary_work_area()
+        };
+        var adj = win32::Rect { left: 0, top: 0, right: width, bottom: height };
+        win32::AdjustWindowRectEx(adj, style, 0, 0);
+        let est_w = if adj.width() > 0 { adj.width() } else { width };
+        let est_h = if adj.height() > 0 { adj.height() } else { height };
+        let cx0, cy0 = compute_centered_pos(work, est_w, est_h);
+        init_x = cx0;
+        init_y = cy0;
+    } else if app.window_pos_mode == WIN_POS_MANUAL {
+        init_x = app.window_pos_x;
+        init_y = app.window_pos_y;
+    }
+
+    let hwnd = win32::create_window(title, width, height, style, 0, init_x, init_y);
     guard hwnd.is_valid() else { return WINDOW_NONE; }
 
     hwnd.set_dark_titlebar(app.theme.is_dark);
     hwnd.set_corner_preference(win32::DWMWCP_ROUND);
+
+    // Re-center using the actual outer window rect (accounts for DPI/DWM borders) before GPU surface creation.
+    if app.window_pos_mode == WIN_POS_CENTER_PRIMARY || app.window_pos_mode == WIN_POS_CENTER_MONITOR {
+        let work = if app.window_pos_mode == WIN_POS_CENTER_MONITOR {
+            monitor_work_area(app.window_pos_monitor)
+        } else {
+            primary_work_area()
+        };
+        let wrc = hwnd.window_rect();
+        let ww = wrc.width();
+        let wh = wrc.height();
+        if ww > 0 && wh > 0 {
+            let cx, cy = compute_centered_pos(work, ww, wh);
+            if wrc.left != cx || wrc.top != cy {
+                hwnd.move(cx, cy, ww, wh, false);
+            }
+        }
+    }
 
     var d2d = win32::D2dTarget {};
     var gl2d = win32::Gl2dTarget {};
     var fonts = FontSet {};
     var gdi_fonts = GdiFontSet {};
     var gl2d_fonts = Gl2dFontSet {};
+    var metric_dc = win32::Hdc {};
+    var metric_fonts = GdiFontSet {};
 
     match backend {
         Direct2D => {
@@ -618,6 +1147,7 @@ fn create_window_with_backend(
             fonts = create_window_fonts(d2d, app.theme);
         },
         Software => {
+            metric_dc = win32::Hdc { raw: CreateCompatibleDC(0) };
             gdi_fonts = create_gdi_fonts(app.theme);
         },
         OpenGL => {
@@ -626,12 +1156,15 @@ fn create_window_with_backend(
                 hwnd.destroy();
                 return WINDOW_NONE;
             }
+            metric_dc = win32::Hdc { raw: CreateCompatibleDC(0) };
             gl2d_fonts = create_gl2d_fonts(gl2d, app.theme);
+            metric_fonts = create_gdi_fonts_scaled(app.theme, 1.15);
         },
     }
 
     let wid = alloc_window_slot(app);
     let rc = hwnd.client_rect();
+    let final_wrc = hwnd.window_rect();
     let cw = if rc.width() > 0 { rc.width() } else { width };
     let ch = if rc.height() > 0 { rc.height() } else { height };
 
@@ -644,6 +1177,10 @@ fn create_window_with_backend(
     app.windows[wid.index].fonts = fonts;
     app.windows[wid.index].gdi_fonts = gdi_fonts;
     app.windows[wid.index].gl2d_fonts = gl2d_fonts;
+    app.windows[wid.index].metric_dc = metric_dc;
+    app.windows[wid.index].metric_fonts = metric_fonts;
+    app.windows[wid.index].x = final_wrc.left;
+    app.windows[wid.index].y = final_wrc.top;
     app.windows[wid.index].width = cw;
     app.windows[wid.index].height = ch;
     app.windows[wid.index].dpi = hwnd.dpi();
@@ -684,6 +1221,18 @@ fn create_headless_window(app: App&, title: const u8[:], width: i32 = 800, heigh
     app.windows[wid.index].backend = RenderBackend.Software;
     app.windows[wid.index].width = width;
     app.windows[wid.index].height = height;
+    if app.window_pos_mode == WIN_POS_CENTER_PRIMARY {
+        let cx, cy = compute_centered_pos(primary_work_area(), width, height);
+        app.windows[wid.index].x = cx;
+        app.windows[wid.index].y = cy;
+    } else if app.window_pos_mode == WIN_POS_CENTER_MONITOR {
+        let cx, cy = compute_centered_pos(monitor_work_area(app.window_pos_monitor), width, height);
+        app.windows[wid.index].x = cx;
+        app.windows[wid.index].y = cy;
+    } else if app.window_pos_mode == WIN_POS_MANUAL {
+        app.windows[wid.index].x = app.window_pos_x;
+        app.windows[wid.index].y = app.window_pos_y;
+    }
     app.windows[wid.index].visible = true;
     app.windows[wid.index].dirty = true;
     app.windows[wid.index].layout_dirty = true;
@@ -727,12 +1276,71 @@ fn hide_window(app: App&, win: WindowId) {
     }
 }
 
-fn set_window_title(app: App&, win: WindowId, title: const u8[:]) {
+// Moves a window to top-left screen coordinates `(x, y)` while preserving its size.
+fn set_window_position(app: App&, win: WindowId, x: i32, y: i32) {
+    guard app.valid_window(win) else { return; }
+    app.windows[win.index].x = x;
+    app.windows[win.index].y = y;
+    if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
+        let wrc = app.windows[win.index].hwnd.window_rect();
+        let ww = wrc.width();
+        let wh = wrc.height();
+        if ww > 0 && wh > 0 {
+            app.windows[win.index].hwnd.move(x, y, ww, wh, app.windows[win.index].visible);
+            let updated = app.windows[win.index].hwnd.window_rect();
+            app.windows[win.index].x = updated.left;
+            app.windows[win.index].y = updated.top;
+        }
+    }
+}
+
+// Returns the window's top-left screen coordinates `(x, y)`.
+fn window_position(app: const App&, win: WindowId) -> i32, i32 {
+    guard app.valid_window(win) else { return 0, 0; }
+    if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
+        let wrc = app.windows[win.index].hwnd.window_rect();
+        return wrc.left, wrc.top;
+    }
+    return app.windows[win.index].x, app.windows[win.index].y;
+}
+
+fn center_window_in_rect(app: App&, win: WindowId, work: win32::Rect) {
+    guard app.valid_window(win) else { return; }
+    var ww = app.windows[win.index].width;
+    var wh = app.windows[win.index].height;
+    if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
+        let wrc = app.windows[win.index].hwnd.window_rect();
+        if wrc.width() > 0 && wrc.height() > 0 {
+            ww = wrc.width();
+            wh = wrc.height();
+        }
+    }
+    let cx, cy = compute_centered_pos(work, ww, wh);
+    app.set_window_position(win, cx, cy);
+}
+
+// Centers an existing window inside the primary (main) display work area.
+fn center_window(app: App&, win: WindowId) {
+    center_window_in_rect(app, win, primary_work_area());
+}
+
+// Centers an existing window inside the specified monitor's work area.
+fn center_window_on_monitor(app: App&, win: WindowId, monitor_index: i32) {
+    center_window_in_rect(app, win, monitor_work_area(monitor_index));
+}
+
+fn set_window_title_raw(app: App&, win: WindowId, title: const u8[:]) {
     guard app.valid_window(win) else { return; }
     str_set(app.str_pool, app.windows[win.index].title, title);
     if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
         app.windows[win.index].hwnd.set_title(title);
     }
+}
+
+fn set_window_title(app: App&, win: WindowId, title: const u8[:]) {
+    guard app.valid_window(win) else { return; }
+    detach_window_i18n_binding(app, win, I18N_TARGET_WINDOW_TITLE);
+    set_window_title_raw(app, win, title);
 }
 
 fn set_auto_close(app: App&, win: WindowId, enabled: bool) {
@@ -770,11 +1378,22 @@ fn close_window(app: App&, win: WindowId) {
     }
     compact_list_items(app);
     compact_connections(app);
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive && eq(app.i18n_bindings[i].window, win) {
+            app.i18n_bindings[i].alive = false;
+        }
+    }
+    compact_i18n_bindings(app);
 
     if !app.windows[win.index].headless {
         destroy_window_fonts(app.windows[win.index].fonts);
         destroy_gdi_fonts(app.windows[win.index].gdi_fonts);
         destroy_gl2d_fonts(app.windows[win.index].gl2d_fonts);
+        destroy_gdi_fonts(app.windows[win.index].metric_fonts);
+        if app.windows[win.index].metric_dc.is_valid() {
+            DeleteDC(app.windows[win.index].metric_dc.raw);
+            app.windows[win.index].metric_dc = win32::Hdc {};
+        }
         if app.windows[win.index].d2d.is_valid() {
             app.windows[win.index].d2d.destroy();
             app.windows[win.index].d2d = win32::D2dTarget {};
@@ -1135,7 +1754,9 @@ fn add_tab(app: App&, tab_widget: WidgetId, title: const u8[:], layout: LayoutKi
     app.widgets[page.index].policy_v = SizePolicy.Expanding;
     attach_child(app, tab_widget, page);
 
-    var item = ListItem { alive: true, owner: tab_widget, page: page };
+    let uid = app.next_list_item_uid;
+    app.next_list_item_uid += 1;
+    var item = ListItem { alive: true, uid: uid, owner: tab_widget, page: page };
     str_set(app.str_pool, item.text, title);
     app.list_items.push(item);
 
@@ -1175,6 +1796,7 @@ fn set_status_bar(app: App&, win: WindowId, initial_text: const u8[:] = "Ready")
     guard app.valid_window(win) else { return WIDGET_NONE; }
     let existing = app.windows[win.index].status_bar;
     if app.valid_widget(existing) {
+        detach_window_i18n_binding(app, win, I18N_TARGET_STATUS_BAR);
         str_set(app.str_pool, app.widgets[existing.index].text, initial_text);
         app.mark_dirty(win);
         return existing;
@@ -1188,12 +1810,18 @@ fn set_status_bar(app: App&, win: WindowId, initial_text: const u8[:] = "Ready")
     return id;
 }
 
-fn set_status_text(app: App&, win: WindowId, text: const u8[:]) {
+fn set_status_text_raw(app: App&, win: WindowId, text: const u8[:]) {
     guard app.valid_window(win) else { return; }
     let sb = app.windows[win.index].status_bar;
     guard app.valid_widget(sb) else { return; }
     str_set(app.str_pool, app.widgets[sb.index].text, text, 64);
     app.mark_dirty(win);
+}
+
+fn set_status_text(app: App&, win: WindowId, text: const u8[:]) {
+    guard app.valid_window(win) else { return; }
+    detach_window_i18n_binding(app, win, I18N_TARGET_STATUS_BAR);
+    set_status_text_raw(app, win, text);
 }
 
 fn add_canvas(app: App&, parent: WidgetId, min_w: f32 = 200.0, min_h: f32 = 160.0) -> WidgetId {
@@ -1301,13 +1929,25 @@ fn set_layout(app: App&, id: WidgetId, layout: LayoutKind) {
     app.mark_widget_layout_dirty(id);
 }
 
-fn set_text(app: App&, id: WidgetId, text: const u8[:]) {
+fn set_widget_text_raw(app: App&, id: WidgetId, text: const u8[:]) {
     guard app.valid_widget(id) else { return; }
     str_set(app.str_pool, app.widgets[id.index].text, text);
     let n = app.widgets[id.index].text.len;
     app.widgets[id.index].caret = n;
     app.widgets[id.index].sel_anchor = n;
+    app.widgets[id.index].text_scroll_byte = 0;
+    app.widgets[id.index].text_scroll_x = 0.0;
+    let win = app.widgets[id.index].window;
+    if app.valid_window(win) && eq(app.windows[win.index].focused, id) {
+        ensure_line_edit_caret_visible(app, id);
+    }
     app.mark_widget_layout_dirty(id);
+}
+
+fn set_text(app: App&, id: WidgetId, text: const u8[:]) {
+    guard app.valid_widget(id) else { return; }
+    detach_widget_i18n_binding(app, id, I18N_TARGET_WIDGET_TEXT);
+    set_widget_text_raw(app, id, text);
 }
 
 fn text(app: const App&, id: WidgetId) -> const u8[:] {
@@ -1315,15 +1955,27 @@ fn text(app: const App&, id: WidgetId) -> const u8[:] {
     return app.str_view(app.widgets[id.index].text);
 }
 
-fn set_placeholder(app: App&, id: WidgetId, text: const u8[:]) {
+fn set_widget_placeholder_raw(app: App&, id: WidgetId, text: const u8[:]) {
     guard app.valid_widget(id) else { return; }
     str_set(app.str_pool, app.widgets[id.index].placeholder, text);
     app.mark_widget_dirty(id);
 }
 
-fn set_tooltip(app: App&, id: WidgetId, text: const u8[:]) {
+fn set_placeholder(app: App&, id: WidgetId, text: const u8[:]) {
+    guard app.valid_widget(id) else { return; }
+    detach_widget_i18n_binding(app, id, I18N_TARGET_WIDGET_PLACEHOLDER);
+    set_widget_placeholder_raw(app, id, text);
+}
+
+fn set_widget_tooltip_raw(app: App&, id: WidgetId, text: const u8[:]) {
     guard app.valid_widget(id) else { return; }
     str_set(app.str_pool, app.widgets[id.index].tooltip, text);
+}
+
+fn set_tooltip(app: App&, id: WidgetId, text: const u8[:]) {
+    guard app.valid_widget(id) else { return; }
+    detach_widget_i18n_binding(app, id, I18N_TARGET_WIDGET_TOOLTIP);
+    set_widget_tooltip_raw(app, id, text);
 }
 
 fn set_visible(app: App&, id: WidgetId, visible: bool) {
@@ -1519,6 +2171,12 @@ fn set_text_align(app: App&, id: WidgetId, h: Align, v: Align = Align.Center) {
     app.mark_widget_dirty(id);
 }
 
+fn set_word_wrap(app: App&, id: WidgetId, enabled: bool = true) {
+    guard app.valid_widget(id) else { return; }
+    app.widgets[id.index].word_wrap = enabled;
+    app.mark_widget_layout_dirty(id);
+}
+
 fn set_font_role(app: App&, id: WidgetId, role: FontRole) {
     guard app.valid_widget(id) else { return; }
     app.widgets[id.index].font_role = role;
@@ -1560,6 +2218,12 @@ fn set_split_ratio(app: App&, id: WidgetId, ratio: f32) {
     app.mark_widget_layout_dirty(id);
 }
 
+fn set_form_label_width(app: App&, id: WidgetId, w: f32) {
+    guard app.valid_widget(id) else { return; }
+    app.widgets[id.index].form_label_width = if w > 0.0 { w } else { 130.0 };
+    app.mark_widget_layout_dirty(id);
+}
+
 fn widget_rect(app: const App&, id: WidgetId) -> RectF {
     guard app.valid_widget(id) else { return RectF {}; }
     return app.widgets[id.index].rect;
@@ -1590,10 +2254,22 @@ fn find_nth_item(app: const App&, owner: WidgetId, nth: i32) -> i64 {
     return -1;
 }
 
+fn find_item_by_uid(app: const App&, owner: WidgetId, uid: u64) -> i64 {
+    if uid == 0 { return -1; }
+    for i in app.list_items.len {
+        if app.list_items[i].alive && app.list_items[i].uid == uid && eq(app.list_items[i].owner, owner) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 fn add_item(app: App&, owner: WidgetId, text: const u8[:], subtext: const u8[:] = "", tag: i64 = 0) -> i32 {
     guard app.valid_widget(owner) else { return -1; }
     let idx = app.item_count(owner);
-    var item = ListItem { alive: true, owner: owner, tag: tag };
+    let uid = app.next_list_item_uid;
+    app.next_list_item_uid += 1;
+    var item = ListItem { alive: true, uid: uid, owner: owner, tag: tag };
     str_set(app.str_pool, item.text, text);
     if subtext.len > 0 {
         str_set(app.str_pool, item.subtext, subtext);
@@ -1612,6 +2288,42 @@ fn add_item(app: App&, owner: WidgetId, text: const u8[:], subtext: const u8[:] 
     return idx;
 }
 
+fn set_list_item_text_by_uid_raw(app: App&, owner: WidgetId, uid: u64, text: const u8[:]) {
+    guard app.valid_widget(owner) else { return; }
+    let slot = find_item_by_uid(app, owner, uid);
+    guard slot >= 0 else { return; }
+    str_set(app.str_pool, app.list_items[slot].text, text);
+    app.mark_widget_layout_dirty(owner);
+}
+
+fn set_list_item_subtext_by_uid_raw(app: App&, owner: WidgetId, uid: u64, subtext: const u8[:]) {
+    guard app.valid_widget(owner) else { return; }
+    let slot = find_item_by_uid(app, owner, uid);
+    guard slot >= 0 else { return; }
+    str_set(app.str_pool, app.list_items[slot].subtext, subtext);
+    app.mark_widget_dirty(owner);
+}
+
+fn set_item_text(app: App&, owner: WidgetId, index: i32, text: const u8[:]) {
+    guard app.valid_widget(owner) else { return; }
+    let slot = app.find_nth_item(owner, index);
+    guard slot >= 0 else { return; }
+    let uid = app.list_items[slot].uid;
+    detach_item_i18n_binding(app, owner, uid, I18N_TARGET_LIST_ITEM_TEXT);
+    str_set(app.str_pool, app.list_items[slot].text, text);
+    app.mark_widget_layout_dirty(owner);
+}
+
+fn set_item_subtext(app: App&, owner: WidgetId, index: i32, subtext: const u8[:]) {
+    guard app.valid_widget(owner) else { return; }
+    let slot = app.find_nth_item(owner, index);
+    guard slot >= 0 else { return; }
+    let uid = app.list_items[slot].uid;
+    detach_item_i18n_binding(app, owner, uid, I18N_TARGET_LIST_ITEM_SUBTEXT);
+    str_set(app.str_pool, app.list_items[slot].subtext, subtext);
+    app.mark_widget_dirty(owner);
+}
+
 fn clear_items(app: App&, owner: WidgetId) {
     guard app.valid_widget(owner) else { return; }
     let is_tabs = match app.widgets[owner.index].kind { TabWidget => true, _ => false };
@@ -1625,6 +2337,13 @@ fn clear_items(app: App&, owner: WidgetId) {
             }
         }
     }
+    for i in app.i18n_bindings.len {
+        if app.i18n_bindings[i].alive && eq(app.i18n_bindings[i].widget, owner) &&
+           (app.i18n_bindings[i].target_kind == I18N_TARGET_LIST_ITEM_TEXT ||
+            app.i18n_bindings[i].target_kind == I18N_TARGET_LIST_ITEM_SUBTEXT) {
+            app.i18n_bindings[i].alive = false;
+        }
+    }
     app.widgets[owner.index].selected_index = -1;
     app.widgets[owner.index].hovered_item = -1;
     app.widgets[owner.index].scroll_y = 0.0;
@@ -1636,6 +2355,7 @@ fn clear_items(app: App&, owner: WidgetId) {
         app.windows[win.index].open_combo_scroll = 0;
     }
     compact_list_items(app);
+    compact_i18n_bindings(app);
     app.mark_widget_layout_dirty(owner);
 }
 
@@ -1643,8 +2363,10 @@ fn remove_item(app: App&, owner: WidgetId, index: i32) -> bool {
     let slot = app.find_nth_item(owner, index);
     guard slot >= 0 else { return false; }
     let page = app.list_items[slot].page;
+    let uid = app.list_items[slot].uid;
     let is_tabs = match app.widgets[owner.index].kind { TabWidget => true, _ => false };
     app.list_items[slot].alive = false;
+    detach_all_item_i18n_bindings(app, owner, uid);
     if is_tabs && app.valid_widget(page) {
         detach_from_parent(app, page);
         destroy_widget_subtree(app, page);

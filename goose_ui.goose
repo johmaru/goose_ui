@@ -13,4 +13,5 @@ import layout;
 import painter;
 import events;
 import native;
+import i18n;
 import dsl;

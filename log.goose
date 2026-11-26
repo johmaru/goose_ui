@@ -973,6 +973,7 @@ fn log_signal(app: App&, sig: Signal) {
         KeyPressed s => { sig_name = "KeyPressed"; win = s.window; wid = s.widget; has_widget = true; },
         CanvasMouseDown s => { sig_name = "CanvasMouseDown"; win = s.window; wid = s.widget; has_widget = true; },
         CanvasMouseMove s => { sig_name = "CanvasMouseMove"; win = s.window; wid = s.widget; has_widget = true; },
+        CanvasMouseLeave s => { sig_name = "CanvasMouseLeave"; win = s.window; wid = s.widget; has_widget = true; },
         CanvasMouseUp s => { sig_name = "CanvasMouseUp"; win = s.window; wid = s.widget; has_widget = true; },
         CanvasWheel s => { sig_name = "CanvasWheel"; win = s.window; wid = s.widget; has_widget = true; },
         FilesDropped s => { sig_name = "FilesDropped"; win = s.window; },

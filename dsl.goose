@@ -291,6 +291,19 @@ fn width(n: Node, w: f32) -> Node { n.app.set_fixed_width(n.id, w); return n; }
 fn height(n: Node, h: f32) -> Node { n.app.set_fixed_height(n.id, h); return n; }
 fn min_size(n: Node, w: f32, h: f32) -> Node { n.app.set_min_size(n.id, w, h); return n; }
 fn max_size(n: Node, w: f32, h: f32) -> Node { n.app.set_max_size(n.id, w, h); return n; }
+fn fit_text(n: Node, pad_x: f32 = 8.0, pad_y: f32 = 4.0) -> Node {
+    n.app.set_fit_to_text(n.id, true, pad_x, pad_y);
+    return n;
+}
+fn fit_text_clamped(n: Node, pad_x: f32 = 8.0, min_w: f32 = 0.0, max_w: f32 = 100000.0) -> Node {
+    n.app.set_fit_to_text(n.id, true, pad_x, 4.0);
+    if n.app.valid_widget(n.id) {
+        n.app.widgets[n.id.index].min_size.w = min_w;
+        n.app.widgets[n.id.index].max_size.w = max_w;
+        n.app.mark_widget_layout_dirty(n.id);
+    }
+    return n;
+}
 fn policy(n: Node, h: SizePolicy, v: SizePolicy) -> Node { n.app.set_size_policy(n.id, h, v); return n; }
 fn align(n: Node, h: Align, v: Align = Align.Stretch) -> Node { n.app.set_align(n.id, h, v); return n; }
 fn padding(n: Node, all: f32) -> Node { n.app.set_padding(n.id, all); return n; }

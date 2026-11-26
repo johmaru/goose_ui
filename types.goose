@@ -327,6 +327,7 @@ enum Signal {
     KeyPressed { window: WindowId, widget: WidgetId, key: u32, mods: u32 },
     CanvasMouseDown { widget: WidgetId, window: WindowId, x: f32, y: f32, button: i32 },
     CanvasMouseMove { widget: WidgetId, window: WindowId, x: f32, y: f32 },
+    CanvasMouseLeave { widget: WidgetId, window: WindowId },
     CanvasMouseUp { widget: WidgetId, window: WindowId, x: f32, y: f32, button: i32 },
     CanvasWheel { widget: WidgetId, window: WindowId, x: f32, y: f32, delta: i32 },
     FilesDropped { window: WindowId, count: i32 },

@@ -276,7 +276,7 @@ fn cycle_focus(app: App&, win: WindowId, reverse: bool) {
     if cur_idx < 0 {
         next_idx = if reverse { n - 1 } else { 0 };
     } else if reverse {
-        next_idx = (cur_idx - 1) % n;
+        next_idx = (cur_idx + n - 1) % n;
     } else {
         next_idx = (cur_idx + 1) % n;
     }
@@ -479,6 +479,24 @@ fn ensure_combo_item_visible(app: App&, win: WindowId, combo: WidgetId, idx: i32
     app.windows[win.index].open_combo_scroll = sc;
 }
 
+// --- Hover Leave Cleanup ----------------------------------------------------
+
+fn clear_widget_hover(app: App&, win: WindowId, prev: WidgetId) {
+    guard app.valid_widget(prev) else { return; }
+    match app.widgets[prev.index].kind {
+        ListView => {
+            if app.widgets[prev.index].hovered_item != -1 {
+                app.widgets[prev.index].hovered_item = -1;
+                app.mark_dirty(win);
+            }
+        },
+        Canvas => {
+            app.push_signal(Signal.CanvasMouseLeave { widget: prev, window: win });
+        },
+        _ => {},
+    }
+}
+
 // --- Synthetic & OS Event Handlers ------------------------------------------
 
 fn handle_mouse_move(app: App&, win: WindowId, px: f32, py: f32) {
@@ -563,6 +581,7 @@ fn handle_mouse_move(app: App&, win: WindowId, px: f32, py: f32) {
     let hit = app.hit_test(win, px, py);
     let prev = app.windows[win.index].hovered;
     if !eq(hit, prev) {
+        clear_widget_hover(app, win, prev);
         app.windows[win.index].hovered = hit;
         app.windows[win.index].hover_since_ms = win32::tick_count_ms();
         schedule_tooltip_timer(app, win, hit);
@@ -1349,6 +1368,9 @@ fn dispatch_win32_event(app: App&, ev: const win32::Event&) {
     } else if ev.msg == win32::WM_DROPFILES {
         app.push_signal(Signal.FilesDropped { window: win, count: ev.command_id as! i32 });
     } else if ev.msg == win32::WM_KILLFOCUS {
+        let prev_hov = app.windows[win.index].hovered;
+        app.windows[win.index].hovered = WIDGET_NONE;
+        clear_widget_hover(app, win, prev_hov);
         app.windows[win.index].open_combo = WIDGET_NONE;
         app.windows[win.index].open_combo_hover = -1;
         app.windows[win.index].open_combo_scroll = 0;

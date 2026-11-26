@@ -95,6 +95,7 @@ recursive fn measure_widget(app: App&, id: WidgetId) -> SizeF {
     let kind = app.widgets[id.index].kind;
     let layout = app.widgets[id.index].layout;
     let ctrl_h = app.theme.control_height;
+    let win_idx = if app.valid_window(app.widgets[id.index].window) { app.widgets[id.index].window.index } else { -1 };
     var hint = SizeF {};
 
     match kind {
@@ -108,28 +109,48 @@ recursive fn measure_widget(app: App&, id: WidgetId) -> SizeF {
             };
         },
         Label => {
-            let role = app.widgets[id.index].font_role;
-            let fsz = font_size_for_role(app.theme, role);
-            let tw = measure_text_width_role(app.str_view(app.widgets[id.index].text), app.theme, role);
-            hint = SizeF { w: tw + 4.0, h: fsz * 1.45 + 2.0 };
+            if app.widgets[id.index].fit_text {
+                hint = compute_fit_text_size(app, id, app.widgets[id.index].fit_pad_x, app.widgets[id.index].fit_pad_y);
+            } else {
+                let role = app.widgets[id.index].font_role;
+                let fsz = font_size_for_role(app.theme, role);
+                let tw = measure_win_text_width(app, win_idx, app.str_view(app.widgets[id.index].text), role);
+                hint = SizeF { w: tw + 4.0, h: fsz * 1.45 + 2.0 };
+            }
         },
         Button => {
-            let role = app.widgets[id.index].font_role;
-            let tw = measure_text_width_role(app.str_view(app.widgets[id.index].text), app.theme, role);
-            hint = SizeF { w: if tw + 28.0 > 72.0 { tw + 28.0 } else { 72.0 }, h: ctrl_h };
+            if app.widgets[id.index].fit_text {
+                hint = compute_fit_text_size(app, id, app.widgets[id.index].fit_pad_x, app.widgets[id.index].fit_pad_y);
+            } else {
+                let role = app.widgets[id.index].font_role;
+                let tw = measure_win_text_width(app, win_idx, app.str_view(app.widgets[id.index].text), role);
+                hint = SizeF { w: if tw + 28.0 > 72.0 { tw + 28.0 } else { 72.0 }, h: ctrl_h };
+            }
         },
         CheckBox, RadioButton => {
-            let role = app.widgets[id.index].font_role;
-            let tw = measure_text_width_role(app.str_view(app.widgets[id.index].text), app.theme, role);
-            hint = SizeF { w: 26.0 + tw + 6.0, h: 26.0 };
+            if app.widgets[id.index].fit_text {
+                hint = compute_fit_text_size(app, id, app.widgets[id.index].fit_pad_x, app.widgets[id.index].fit_pad_y);
+            } else {
+                let role = app.widgets[id.index].font_role;
+                let tw = measure_win_text_width(app, win_idx, app.str_view(app.widgets[id.index].text), role);
+                hint = SizeF { w: 26.0 + tw + 6.0, h: 26.0 };
+            }
         },
         ToggleSwitch => {
-            let role = app.widgets[id.index].font_role;
-            let tw = measure_text_width_role(app.str_view(app.widgets[id.index].text), app.theme, role);
-            hint = SizeF { w: 46.0 + tw + 8.0, h: 28.0 };
+            if app.widgets[id.index].fit_text {
+                hint = compute_fit_text_size(app, id, app.widgets[id.index].fit_pad_x, app.widgets[id.index].fit_pad_y);
+            } else {
+                let role = app.widgets[id.index].font_role;
+                let tw = measure_win_text_width(app, win_idx, app.str_view(app.widgets[id.index].text), role);
+                hint = SizeF { w: 46.0 + tw + 8.0, h: 28.0 };
+            }
         },
         LineEdit => {
-            hint = SizeF { w: 180.0, h: ctrl_h };
+            if app.widgets[id.index].fit_text {
+                hint = compute_fit_text_size(app, id, app.widgets[id.index].fit_pad_x, app.widgets[id.index].fit_pad_y);
+            } else {
+                hint = SizeF { w: 180.0, h: ctrl_h };
+            }
         },
         Slider => {
             hint = match app.widgets[id.index].orientation {
@@ -168,7 +189,7 @@ recursive fn measure_widget(app: App&, id: WidgetId) -> SizeF {
             var tab_cnt: i32 = 0;
             for i in app.list_items.len {
                 if app.list_items[i].alive && eq(app.list_items[i].owner, id) {
-                    let tw = measure_text_width_role(app.str_view(app.list_items[i].text), app.theme, FontRole.BodyBold);
+                    let tw = measure_win_text_width(app, win_idx, app.str_view(app.list_items[i].text), FontRole.BodyBold);
                     let w = if tw + 28.0 > 76.0 { tw + 28.0 } else { 76.0 };
                     if tab_cnt > 0 { bar_w += 4.0; }
                     bar_w += w;

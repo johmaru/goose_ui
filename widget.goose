@@ -70,6 +70,9 @@ struct Widget {
     text_align_h: Align = Align.Start,
     text_align_v: Align = Align.Center,
     word_wrap: bool = false,
+    fit_text: bool = false,
+    fit_pad_x: f32 = 8.0,
+    fit_pad_y: f32 = 4.0,
 
     // Widget-specific state
     variant: ButtonVariant = ButtonVariant.Default,

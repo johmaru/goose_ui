@@ -712,6 +712,51 @@ fn test_regressions_inputs_and_signals() {
     assert(goose_ui::utf8_next_char("abc", -5) == 0);
 
     app.destroy_all();
+
+    // 9. Reverse Shift+Tab from index 0 wraps safely; ListView & Canvas clear hover on leave
+    {
+        var app2 = goose_ui::App { .. };
+        let w2 = app2.create_headless_window("FocusHoverReg", 420, 320);
+        let r2_root = app2.root(w2);
+        let b0 = app2.add_button(r2_root, "First");
+        let b1 = app2.add_button(r2_root, "Second");
+        let lv2 = app2.add_list_view(r2_root, 26.0);
+        app2.set_fixed_height(lv2, 90.0);
+        app2.add_item(lv2, "Item A");
+        app2.add_item(lv2, "Item B");
+        let cv2 = app2.add_canvas(r2_root, 120.0, 50.0);
+        app2.set_fixed_height(cv2, 50.0);
+        app2.update_layout(w2, true);
+
+        app2.set_focus(w2, b0);
+        app2.inject_key(w2, win32::VK_TAB, goose_ui::KMOD_SHIFT);
+        assert(goose_ui::eq(app2.windows[w2.index].focused, cv2));
+        app2.inject_key(w2, win32::VK_TAB, goose_ui::KMOD_SHIFT);
+        assert(goose_ui::eq(app2.windows[w2.index].focused, lv2));
+
+        let rlv2 = app2.widget_rect(lv2);
+        app2.inject_mouse_move(w2, rlv2.x + 12.0, rlv2.y + 10.0);
+        assert(app2.widgets[lv2.index].hovered_item == 0);
+
+        let rcv2 = app2.widget_rect(cv2);
+        app2.inject_mouse_move(w2, rcv2.x + 10.0, rcv2.y + 10.0);
+        assert(app2.widgets[lv2.index].hovered_item == -1);
+
+        while app2.next_signal(sig) {}
+        let rb0 = app2.widget_rect(b0);
+        app2.inject_mouse_move(w2, rb0.x + 10.0, rb0.y + 10.0);
+        var saw_leave = false;
+        while app2.next_signal(sig) {
+            match sig {
+                CanvasMouseLeave s => { if goose_ui::eq(s.widget, cv2) { saw_leave = true; } },
+                _ => {},
+            }
+        }
+        assert(saw_leave);
+        let _unused = b1;
+        app2.destroy_all();
+    }
+
     print("[OK] ListView/ComboBox/LineEdit/Radio/Canvas/DoubleClick/IncrementValue regressions");
 }
 
@@ -2027,6 +2072,106 @@ fn test_webview_live_smoke() {
     print("[OK] WebView2 live smoke across Software, Direct2D & OpenGL (eval_js=42)");
 }
 
+fn test_text_fit_api() {
+    // 1. Headless text measurement, fit_text, i18n re-fit, clamping, and fit_to_text_now
+    {
+        var app = goose_ui::App { .. };
+        assert(app.i18n_load_json_str("en", "{\"k\":{\"mute\":\"Mute\",\"muted\":\"Muted\"}}"));
+        assert(app.i18n_load_json_str("ja", "{\"k\":{\"mute\":\"ミュート\",\"muted\":\"ミュート中\"}}"));
+        assert(app.set_locale("en"));
+
+        let win = app.create_headless_window("FitTextHL", 640, 320);
+        let sz_en = app.measure_text(win, "DevTools", goose_ui::FontRole.Caption);
+        let sz_jp = app.measure_text(win, "ミュート中", goose_ui::FontRole.Caption);
+        assert(sz_en.w > 0.0 && sz_en.h > 0.0);
+        assert(sz_jp.w > 0.0 && sz_jp.h > 0.0);
+
+        var b_short = goose_ui::WIDGET_NONE;
+        var b_tr = goose_ui::WIDGET_NONE;
+        var b_clamp = goose_ui::WIDGET_NONE;
+        var b_now = goose_ui::WIDGET_NONE;
+        app.ui(win) { u =>
+            u.hbox(6.0, 8.0) { row =>
+                row.button("OK").ghost().caption().height(26.0).fit_text(8.0).bind(b_short);
+                row.tr_button("k.mute").ghost().caption().height(26.0).fit_text(8.0).bind(b_tr);
+                row.button("10%").ghost().caption().height(26.0).fit_text_clamped(6.0, 42.0, 90.0).bind(b_clamp);
+                row.button("External").ghost().caption().height(26.0).bind(b_now);
+            };
+        };
+
+        app.update_layout(win, true);
+        let r_short0 = app.widget_rect(b_short);
+        assert(r_short0.w < 72.0 && approx(r_short0.h, 26.0));
+        assert(r_short0.w >= app.measure_widget_text(b_short).w + 16.0);
+
+        // Growing text expands fit_text button cleanly
+        app.set_text(b_short, "DevTools");
+        app.update_layout(win, true);
+        let r_short1 = app.widget_rect(b_short);
+        assert(r_short1.w > r_short0.w);
+        assert(r_short1.w >= app.measure_widget_text(b_short).w + 16.0);
+
+        // Locale switch automatically re-fits translated text width
+        let r_tr_en = app.widget_rect(b_tr);
+        assert(r_tr_en.w >= app.measure_widget_text(b_tr).w + 16.0);
+        assert(app.set_locale("ja"));
+        app.update_layout(win, true);
+        let r_tr_jp = app.widget_rect(b_tr);
+        assert(app.text(b_tr) == "ミュート");
+        assert(r_tr_jp.w >= app.measure_widget_text(b_tr).w + 16.0);
+
+        // Clamped min_w and max_w bounds
+        assert(approx(app.widget_rect(b_clamp).w, 42.0));
+        app.set_text(b_clamp, "Very Long Clamped Label For Max Width Check");
+        app.update_layout(win, true);
+        assert(approx(app.widget_rect(b_clamp).w, 90.0));
+
+        // Imperative fit_to_text_now applies fixed width from measured text
+        let applied = app.fit_to_text_now(b_now, 8.0, 4.0, false);
+        assert(applied.w >= app.measure_widget_text(b_now).w + 16.0);
+        assert(approx(app.widgets[b_now.index].fixed_w, applied.w));
+
+        app.destroy_all();
+    }
+
+    // 2. Live Direct2D & Software real metric text-fit verification
+    {
+        var app_d2d = goose_ui::App { .. };
+        app_d2d.init(true, goose_ui::RenderBackend.Direct2D);
+        let wd = app_d2d.create_window("FitTextD2D", 520, 200);
+        assert(app_d2d.valid_window(wd));
+        var bd = goose_ui::WIDGET_NONE;
+        var b_ok = goose_ui::WIDGET_NONE;
+        app_d2d.ui(wd) { u =>
+            u.hbox(6.0, 8.0) { r =>
+                r.button("OK").ghost().caption().height(26.0).fit_text(8.0).bind(b_ok);
+                r.button("DevTools").ghost().caption().height(26.0).fit_text(8.0).bind(bd);
+            };
+        };
+        app_d2d.update_layout(wd, true);
+        assert(app_d2d.widget_rect(b_ok).w < 72.0);
+        assert(app_d2d.widget_rect(bd).w >= app_d2d.measure_widget_text(bd).w + 16.0);
+        assert(app_d2d.measure_text(wd, "ミュート中", goose_ui::FontRole.Caption).w > 0.0);
+        app_d2d.destroy_all();
+
+        var app_sw = goose_ui::App { .. };
+        app_sw.init(true, goose_ui::RenderBackend.Software);
+        let ws = app_sw.create_window("FitTextSW", 520, 200);
+        assert(app_sw.valid_window(ws));
+        var bs = goose_ui::WIDGET_NONE;
+        app_sw.ui(ws) { u =>
+            u.hbox(6.0, 8.0) { r =>
+                r.button("DevTools").ghost().caption().height(26.0).fit_text(8.0).bind(bs);
+            };
+        };
+        app_sw.update_layout(ws, true);
+        assert(app_sw.widget_rect(bs).w >= app_sw.measure_widget_text(bs).w + 16.0);
+        app_sw.destroy_all();
+    }
+
+    print("[OK] text measurement & fit_text / fit_to_text_now auto-sizing API (headless, D2D & Software)");
+}
+
 fn main() {
     test_tree_and_handles();
     test_layouts();
@@ -2044,6 +2189,7 @@ fn main() {
     test_window_positioning();
     test_regressions_text_scroll_and_wrap();
     test_viewport_resize_and_stretch();
+    test_text_fit_api();
     test_webview_headless();
     test_webview_live_smoke();
     print("ALL GOOSE_UI TESTS PASSED");

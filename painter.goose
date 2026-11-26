@@ -614,6 +614,11 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             };
             if w.word_wrap {
                 p.draw_text_wrapped(wtext, r.x, r.y, r.w, r.h, fg, w.font_role, w.text_align_h, w.text_align_v);
+            } else if w.fit_text {
+                var lpad_x: f32 = if w.fit_pad_x > 1.0 { w.fit_pad_x - 1.0 } else { 0.0 };
+                if lpad_x * 2.0 >= r.w { lpad_x = 0.0; }
+                let lw_draw = if r.w > lpad_x * 2.0 { r.w - lpad_x * 2.0 } else { r.w };
+                p.draw_text(wtext, r.x + lpad_x, r.y, lw_draw, r.h, fg, w.font_role, w.text_align_h, w.text_align_v);
             } else {
                 p.draw_text(wtext, r.x, r.y, r.w, r.h, fg, w.font_role, w.text_align_h, w.text_align_v);
             }
@@ -711,7 +716,18 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             if is_focused && w.enabled {
                 paint_focus_ring(p, r, rad);
             }
-            p.draw_text(wtext, r.x + 8.0, r.y, r.w - 16.0, r.h, fg, FontRole.BodyBold, w.text_align_h, Align.Center);
+            var bpad_x: f32 = if w.fit_text {
+                if w.fit_pad_x > 1.0 { w.fit_pad_x - 1.0 } else { 0.0 }
+            } else if r.w <= 34.0 {
+                2.0
+            } else if r.w <= 64.0 {
+                4.0
+            } else {
+                8.0
+            };
+            if bpad_x * 2.0 >= r.w { bpad_x = 0.0; }
+            let tw_draw = if r.w > bpad_x * 2.0 { r.w - bpad_x * 2.0 } else { r.w };
+            p.draw_text(wtext, r.x + bpad_x, r.y, tw_draw, r.h, fg, w.font_role, w.text_align_h, Align.Center);
         },
         CheckBox => {
             let box_sz: f32 = 18.0;

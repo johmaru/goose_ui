@@ -250,21 +250,33 @@ fn select_metric_hfont(fonts: const GdiFontSet&, role: FontRole) -> win32::Hfont
     };
 }
 
-fn measure_gdi_text_width(dc: win32::Hdc, font: win32::Hfont, text: const u8[:]) -> f32 {
-    guard text.len > 0 && dc.is_valid() && font.is_valid() else { return 0.0; }
+fn ceil_f32(v: f32) -> f32 {
+    if v <= 0.0 { return 0.0; }
+    let iv = v as! i32;
+    let fv: f32 = iv;
+    return if v > fv { fv + 1.0 } else { fv };
+}
+
+fn measure_gdi_text_size(dc: win32::Hdc, font: win32::Hfont, text: const u8[:]) -> SizeF {
+    guard text.len > 0 && dc.is_valid() && font.is_valid() else { return SizeF {}; }
     var wbuf: u16[>..] = [];
     win32::utf8_to_utf16z(text, wbuf);
     let wlen = (wbuf.len - 1) as! i32;
-    guard wlen > 0 else { return 0.0; }
+    guard wlen > 0 else { return SizeF {}; }
     let old = win32::SelectObject(dc.raw, font.raw);
     var sz = win32::Size {};
     let ok = GetTextExtentPoint32W(dc.raw, wbuf[0], wlen, sz);
     if old != 0 { win32::SelectObject(dc.raw, old); }
     if ok != 0 {
         let w: f32 = sz.cx;
-        return w;
+        let h: f32 = sz.cy;
+        return SizeF { w: w, h: h };
     }
-    return 0.0;
+    return SizeF {};
+}
+
+fn measure_gdi_text_width(dc: win32::Hdc, font: win32::Hfont, text: const u8[:]) -> f32 {
+    return measure_gdi_text_size(dc, font, text).w;
 }
 
 fn has_native_text_metrics(app: const App&, win_idx: i32) -> bool {
@@ -283,16 +295,19 @@ fn win_metric_hfont(app: const App&, win_idx: i32, role: FontRole) -> win32::Hfo
     };
 }
 
-fn measure_win_text_width(app: const App&, win_idx: i32, text: const u8[:], role: FontRole) -> f32 {
-    if text.len == 0 { return 0.0; }
+fn measure_win_text_size(app: const App&, win_idx: i32, text: const u8[:], role: FontRole) -> SizeF {
+    let fallback_h = font_size_for_role(app.theme, role) * 1.45;
+    if text.len == 0 {
+        return SizeF { w: 0.0, h: fallback_h };
+    }
     if win_idx >= 0 && win_idx < app.windows.len && app.windows[win_idx].alive && !app.windows[win_idx].headless {
         match app.windows[win_idx].backend {
             Direct2D => {
                 if app.windows[win_idx].d2d.is_valid() {
                     let df = select_font(app.windows[win_idx].fonts, role);
                     if df.is_valid() {
-                        let w, _h = app.windows[win_idx].d2d.measure_text(text, df);
-                        return w;
+                        let w, h = app.windows[win_idx].d2d.measure_text(text, df);
+                        return SizeF { w: w, h: if h > 0.0 { h } else { fallback_h } };
                     }
                 }
             },
@@ -300,13 +315,22 @@ fn measure_win_text_width(app: const App&, win_idx: i32, text: const u8[:], role
                 if app.windows[win_idx].metric_dc.is_valid() {
                     let hf = win_metric_hfont(app, win_idx, role);
                     if hf.is_valid() {
-                        return measure_gdi_text_width(app.windows[win_idx].metric_dc, hf, text);
+                        let sz = measure_gdi_text_size(app.windows[win_idx].metric_dc, hf, text);
+                        if sz.h <= 0.0 {
+                            return SizeF { w: sz.w, h: fallback_h };
+                        }
+                        return sz;
                     }
                 }
             },
         }
     }
-    return measure_text_width_role(text, app.theme, role);
+    return SizeF { w: measure_text_width_role(text, app.theme, role), h: fallback_h };
+}
+
+fn measure_win_text_width(app: const App&, win_idx: i32, text: const u8[:], role: FontRole) -> f32 {
+    if text.len == 0 { return 0.0; }
+    return measure_win_text_size(app, win_idx, text, role).w;
 }
 
 fn collect_utf8_boundaries(text: const u8[:], out: i32[>..]&) {
@@ -1628,6 +1652,7 @@ fn add_button(app: App&, parent: WidgetId, text: const u8[:], variant: ButtonVar
     let id = alloc_widget(app, WidgetKind.Button, app.widgets[parent.index].window);
     str_set(app.str_pool, app.widgets[id.index].text, text);
     app.widgets[id.index].variant = variant;
+    app.widgets[id.index].font_role = FontRole.BodyBold;
     app.widgets[id.index].focusable = true;
     app.widgets[id.index].cursor = CursorShape.Hand;
     app.widgets[id.index].text_align_h = Align.Center;
@@ -2030,7 +2055,11 @@ fn text(app: const App&, id: WidgetId) -> const u8[:] {
 fn set_widget_placeholder_raw(app: App&, id: WidgetId, text: const u8[:]) {
     guard app.valid_widget(id) else { return; }
     str_set(app.str_pool, app.widgets[id.index].placeholder, text);
-    app.mark_widget_dirty(id);
+    if app.widgets[id.index].fit_text {
+        app.mark_widget_layout_dirty(id);
+    } else {
+        app.mark_widget_dirty(id);
+    }
 }
 
 fn set_placeholder(app: App&, id: WidgetId, text: const u8[:]) {
@@ -2253,6 +2282,69 @@ fn set_font_role(app: App&, id: WidgetId, role: FontRole) {
     guard app.valid_widget(id) else { return; }
     app.widgets[id.index].font_role = role;
     app.mark_widget_layout_dirty(id);
+}
+
+// --- Text Measurement & Auto-Fit Sizing API ---------------------------------
+
+fn measure_text(app: const App&, win: WindowId, text: const u8[:], role: FontRole = FontRole.Body) -> SizeF {
+    let win_idx = if app.valid_window(win) { win.index } else { -1 };
+    return measure_win_text_size(app, win_idx, text, role);
+}
+
+fn measure_widget_text(app: const App&, id: WidgetId) -> SizeF {
+    guard app.valid_widget(id) else { return SizeF {}; }
+    let w = app.widgets[id.index];
+    let win_idx = if app.valid_window(w.window) { w.window.index } else { -1 };
+    var txt = app.str_view(w.text);
+    let is_line_edit = match w.kind { LineEdit => true, _ => false };
+    if is_line_edit && txt.len == 0 {
+        txt = app.str_view(w.placeholder);
+    }
+    return measure_win_text_size(app, win_idx, txt, w.font_role);
+}
+
+fn compute_fit_text_size(app: const App&, id: WidgetId, pad_x: f32 = 8.0, pad_y: f32 = 4.0) -> SizeF {
+    guard app.valid_widget(id) else { return SizeF {}; }
+    let ts = app.measure_widget_text(id);
+    let px = if pad_x >= 0.0 { pad_x } else { 0.0 };
+    let py = if pad_y >= 0.0 { pad_y } else { 0.0 };
+    let tw = ceil_f32(ts.w) + 2.0;
+    let th = ceil_f32(ts.h);
+    let ctrl_h = app.theme.control_height;
+    return match app.widgets[id.index].kind {
+        Label => SizeF { w: tw + px * 2.0, h: th + py * 2.0 },
+        Button => SizeF { w: tw + px * 2.0, h: if th + py * 2.0 > 22.0 { th + py * 2.0 } else { 22.0 } },
+        CheckBox, RadioButton => SizeF { w: 26.0 + tw + px, h: if th + py * 2.0 > 26.0 { th + py * 2.0 } else { 26.0 } },
+        ToggleSwitch => SizeF { w: 46.0 + tw + px, h: if th + py * 2.0 > 28.0 { th + py * 2.0 } else { 28.0 } },
+        LineEdit => SizeF { w: tw + px * 2.0 + 4.0, h: if th + py * 2.0 > ctrl_h { th + py * 2.0 } else { ctrl_h } },
+        _ => SizeF { w: tw + px * 2.0, h: th + py * 2.0 },
+    };
+}
+
+fn set_fit_to_text(app: App&, id: WidgetId, enabled: bool = true, pad_x: f32 = 8.0, pad_y: f32 = 4.0) {
+    guard app.valid_widget(id) else { return; }
+    app.widgets[id.index].fit_text = enabled;
+    app.widgets[id.index].fit_pad_x = if pad_x >= 0.0 { pad_x } else { 0.0 };
+    app.widgets[id.index].fit_pad_y = if pad_y >= 0.0 { pad_y } else { 0.0 };
+    if enabled {
+        app.widgets[id.index].fixed_w = -1.0;
+        app.widgets[id.index].policy_h = SizePolicy.Preferred;
+    }
+    app.mark_widget_layout_dirty(id);
+}
+
+fn fit_to_text_now(app: App&, id: WidgetId, pad_x: f32 = 8.0, pad_y: f32 = 4.0, fit_height: bool = false) -> SizeF {
+    guard app.valid_widget(id) else { return SizeF {}; }
+    let raw = compute_fit_text_size(app, id, pad_x, pad_y);
+    let min_s = app.widgets[id.index].min_size;
+    let max_s = app.widgets[id.index].max_size;
+    let cw = clamp_f32(raw.w, min_s.w, max_s.w);
+    let ch = clamp_f32(raw.h, min_s.h, max_s.h);
+    app.set_fixed_width(id, cw);
+    if fit_height {
+        app.set_fixed_height(id, ch);
+    }
+    return SizeF { w: cw, h: ch };
 }
 
 fn set_bg(app: App&, id: WidgetId, color: Color) {

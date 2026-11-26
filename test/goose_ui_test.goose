@@ -1730,6 +1730,303 @@ fn test_viewport_resize_and_stretch() {
     print("[OK] viewport resize stretch (HBox containers, ScrollArea max_size, D2D/GL/SW & min_size)");
 }
 
+fn verify_webview_backend_smoke(
+    backend: goose_ui::RenderBackend,
+    win_title: const u8[:],
+    udf_dir: const u8[:],
+    run_eval: bool
+) {
+    var app = goose_ui::App { .. };
+    app.init(true, backend);
+    app.set_webview_user_data_dir(udf_dir);
+
+    let win = app.create_window(win_title, 640, 420);
+    assert(app.valid_window(win));
+
+    var wv = goose_ui::WIDGET_NONE;
+    app.ui(win) { u =>
+        u.padding(8.0);
+        u.webview_html("<!doctype html><html><head><title>LiveWV</title></head><body>Hello</body></html>", 300.0, 200.0)
+         .stretch(1.0)
+         .bind(wv);
+    };
+
+    app.windows[win.index].visible = true;
+    app.running = true;
+    app.update_layout(win, true);
+    app.render_window(win);
+
+    var got_ready = false;
+    var sent_eval = false;
+    var got_eval = !run_eval;
+    var eval_req: u64 = 0;
+
+    let deadline = win32::tick_count_ms() + 12000;
+    while win32::tick_count_ms() < deadline && !(got_ready && got_eval) {
+        app.pump_events(false);
+        var sig = goose_ui::Signal.None;
+        while app.next_signal(sig) {
+            match sig {
+                WebViewInitFailed _s => {
+                    assert(false);
+                },
+                WebViewReady s => {
+                    if goose_ui::eq(s.widget, wv) {
+                        got_ready = true;
+                        assert(app.webview_is_ready(wv));
+                        if run_eval && !sent_eval {
+                            sent_eval = true;
+                            eval_req = app.webview_eval_js(wv, "6 * 7");
+                            assert(eval_req != 0);
+                        }
+                    }
+                },
+                WebViewNavigationCompleted s => {
+                    if goose_ui::eq(s.widget, wv) && run_eval && !sent_eval {
+                        sent_eval = true;
+                        eval_req = app.webview_eval_js(wv, "6 * 7");
+                        assert(eval_req != 0);
+                    }
+                },
+                WebViewScriptResult s => {
+                    if goose_ui::eq(s.widget, wv) && s.request_id == eval_req {
+                        assert(s.ok);
+                        assert(app.webview_payload(s.payload) == "42");
+                        got_eval = true;
+                    }
+                },
+                _ => {},
+            }
+        }
+        if !(got_ready && got_eval) {
+            win32::Sleep(10);
+        }
+    }
+    assert(got_ready && got_eval);
+
+    if run_eval {
+        assert(!app.webview_is_muted(wv));
+        assert(app.webview_set_muted(wv, true));
+        assert(app.webview_is_muted(wv));
+        assert(app.webview_set_muted(wv, false));
+        assert(!app.webview_is_muted(wv));
+        let _playing = app.webview_is_playing_audio(wv);
+    }
+
+    app.toggle_theme();
+    app.windows[win.index].width = 760;
+    app.windows[win.index].height = 500;
+    app.update_layout(win, true);
+    app.render_window(win);
+
+    app.destroy_all();
+}
+
+fn test_webview_headless() {
+    var app = goose_ui::App { .. };
+    let win = app.create_headless_window("WebViewHeadless", 900, 600);
+    let _sb = app.set_status_bar(win, "Ready");
+
+    var w_tabs = goose_ui::WIDGET_NONE;
+    var w_stack = goose_ui::WIDGET_NONE;
+    var w_wrap = goose_ui::WIDGET_NONE;
+    var w_sc = goose_ui::WIDGET_NONE;
+    var w_wv = goose_ui::WIDGET_NONE;
+
+    app.ui(win) { u =>
+        u.padding(8.0).spacing(6.0);
+        u.tabs() { t =>
+            t.bind(w_tabs).stretch(1.0);
+            t.tab("Home") { p0 =>
+                p0.label("Home tab");
+            };
+            t.tab("Web") { p1 =>
+                p1.stack(0.0) { st =>
+                    st.bind(w_stack).stretch(1.0);
+                    st.vbox(4.0, 4.0) { s0 =>
+                        s0.label("Stack placeholder");
+                    };
+                    st.vbox(0.0, 0.0) { s1 =>
+                        s1.bind(w_wrap);
+                        s1.scroll_area(0.0, 0.0) { sc =>
+                            sc.bind(w_sc).stretch(1.0);
+                            sc.spacer().height(180.0);
+                            sc.webview("https://example.org", 300.0, 220.0)
+                              .init_script("window.x=1;")
+                              .devtools(false)
+                              .context_menu(false)
+                              .status_bar(true)
+                              .zoom_control(false)
+                              .accelerator_keys(false)
+                              .zoom(1.5)
+                              .new_window_policy(goose_ui::WebViewNewWindowPolicy.NavigateSelf)
+                              .color_scheme(goose_ui::WebViewColorScheme.Auto)
+                              .user_agent("GooseTest/1.0")
+                              .virtual_host("demo.local", "C:\\tmp", goose_ui::WebViewHostAccess.Allow)
+                              .bind(w_wv);
+                        };
+                    };
+                };
+            };
+        };
+    };
+
+    app.windows[win.index].visible = true;
+    app.update_layout(win, true);
+
+    // Inactive TabWidget hides WebView
+    assert(!app.webview_effective_visible(w_wv));
+
+    // Active TabWidget + inactive Stack hides WebView
+    app.set_current_tab(w_tabs, 1);
+    app.update_layout(win, true);
+    assert(!app.webview_effective_visible(w_wv));
+
+    // Active TabWidget + active Stack reveals WebView
+    app.set_selected_index(w_stack, 1);
+    app.update_layout(win, true);
+    assert(app.webview_effective_visible(w_wv));
+    let r_wv = app.widget_rect(w_wv);
+    assert(r_wv.w >= 300.0 && r_wv.h >= 220.0);
+
+    // ScrollArea viewport clipping constrains WebView clipped_rect
+    app.widgets[w_sc.index].scroll_y = 200.0;
+    app.update_layout(win, true);
+    let r_clip = app.webview_clipped_rect(w_wv);
+    let r_sc = app.widget_rect(w_sc);
+    assert(r_clip.w > 0.0 && r_clip.h > 0.0 && r_clip.y >= r_sc.y);
+
+    // Explicit ancestor hide/show toggles WebView effective visibility
+    app.set_visible(w_wrap, false);
+    app.update_layout(win, true);
+    assert(!app.webview_effective_visible(w_wv));
+    app.set_visible(w_wrap, true);
+    app.update_layout(win, true);
+    assert(app.webview_effective_visible(w_wv));
+
+    // Theme switch & drain before signal injection
+    app.toggle_theme();
+    var sig = goose_ui::Signal.None;
+    while app.next_signal(sig) {}
+
+    app.inject_webview_ready(w_wv);
+    app.inject_webview_navigation(w_wv, "https://goose.local/app", true, 0);
+    app.inject_webview_title(w_wv, "Goose WebView");
+    app.inject_webview_message(w_wv, "{\"n\":1}", true, "https://goose.local/");
+    app.inject_webview_message(w_wv, "plain-two", false, "https://other.local/");
+    app.inject_webview_script_result(w_wv, 99, "\"ok\"", true);
+
+    assert(app.webview_is_ready(w_wv));
+    assert(app.webview_url(w_wv) == "https://goose.local/app");
+    assert(app.webview_title(w_wv) == "Goose WebView");
+    assert(app.webview_last_message(w_wv) == "plain-two");
+    assert(app.webview_last_script_result(w_wv) == "\"ok\"");
+    assert(app.webview_zoom(w_wv) > 1.49 && app.webview_zoom(w_wv) < 1.51);
+    assert(!app.webview_is_muted(w_wv));
+    assert(app.webview_set_muted(w_wv, true));
+    assert(app.webview_is_muted(w_wv));
+    assert(!app.webview_is_playing_audio(w_wv));
+    assert(app.webview_set_muted(w_wv, false));
+    assert(!app.webview_is_muted(w_wv));
+
+    var saw_ready = false;
+    var saw_nav_done = false;
+    var saw_title = false;
+    var msg_count: i32 = 0;
+    var saw_res = false;
+    while app.next_signal(sig) {
+        match sig {
+            WebViewReady s => { if goose_ui::eq(s.widget, w_wv) { saw_ready = true; } },
+            WebViewNavigationCompleted s => { if goose_ui::eq(s.widget, w_wv) && s.success { saw_nav_done = true; } },
+            WebViewTitleChanged s => { if goose_ui::eq(s.widget, w_wv) { saw_title = true; } },
+            WebViewMessageReceived s => {
+                if msg_count == 0 {
+                    assert(s.is_json);
+                    assert(app.webview_payload(s.payload) == "{\"n\":1}");
+                    assert(app.webview_payload_source(s.payload) == "https://goose.local/");
+                } else if msg_count == 1 {
+                    assert(!s.is_json);
+                    assert(app.webview_payload(s.payload) == "plain-two");
+                    assert(app.webview_payload_source(s.payload) == "https://other.local/");
+                }
+                msg_count += 1;
+            },
+            WebViewScriptResult s => {
+                assert(s.ok && s.request_id == 99);
+                assert(app.webview_payload(s.payload) == "\"ok\"");
+                saw_res = true;
+            },
+            _ => {},
+        }
+    }
+    assert(saw_ready && saw_nav_done && saw_title && msg_count == 2 && saw_res);
+    assert(app.webview_payloads.len == 0 && app.webview_msg_pool.len == 0);
+
+    // JSON logging of WebView signals
+    let tmp = win32::temp_dir();
+    let sep = if tmp.len > 0 && (tmp[tmp.len - 1] == '\\' || tmp[tmp.len - 1] == '/') { "" } else { "\\" };
+    let log_path = str(tmp, sep, "goose_ui_wv_log_", win32::GetCurrentProcessId(), ".jsonl");
+    assert(app.log_open(log_path, goose_ui::LogOptions {
+        min_level: goose_ui::LogLevel.Debug,
+        append: false,
+        log_ui_events: true,
+    }));
+    app.log_set_stderr(false);
+    app.inject_webview_message(w_wv, "logged-msg", false, "https://log.local/");
+    app.inject_webview_script_result(w_wv, 123, "42", true);
+    app.log_flush();
+    app.log_close();
+
+    var saw_log_msg = false;
+    var saw_log_res = false;
+    let lcnt, lok = goose_ui::each_json_log_entry(log_path) { e =>
+        if e.target == "goose_ui.signal" && e.msg == "WebViewMessageReceived" {
+            var doc: json::Node[>..] = [];
+            var dec: u8[>..] = [];
+            let rn, _er = json::parse(e.raw_json, doc, dec);
+            let flds = json::member(rn, "fields");
+            let p, pok = json::as_string(json::member(flds, "payload"));
+            let src, sok = json::as_string(json::member(flds, "source"));
+            if pok && sok && p == "logged-msg" && src == "https://log.local/" { saw_log_msg = true; }
+        } else if e.target == "goose_ui.signal" && e.msg == "WebViewScriptResult" {
+            var doc: json::Node[>..] = [];
+            var dec: u8[>..] = [];
+            let rn, _er = json::parse(e.raw_json, doc, dec);
+            let flds = json::member(rn, "fields");
+            let req, rok = json::as_i64(json::member(flds, "request_id"));
+            let res, resok = json::as_string(json::member(flds, "result"));
+            if rok && resok && req == 123 && res == "42" { saw_log_res = true; }
+        }
+    };
+    assert(lok && lcnt >= 2 && saw_log_msg && saw_log_res);
+    win32::delete_file(log_path);
+
+    // Destroying widget reclaims WebView slot
+    app.destroy_widget(w_wv);
+    assert(!app.valid_widget(w_wv));
+    for i in app.webviews.len {
+        assert(!app.webviews[i].alive);
+    }
+
+    app.destroy_all();
+    print("[OK] WebView headless layout/visibility/clipping, burst signals, JSON logging & cleanup");
+}
+
+fn test_webview_live_smoke() {
+    if !goose_ui::webview_is_available() {
+        print("[SKIP] WebView2 Runtime not installed on this machine");
+        return;
+    }
+    let tmp = win32::temp_dir();
+    let sep = if tmp.len > 0 && (tmp[tmp.len - 1] == '\\' || tmp[tmp.len - 1] == '/') { "" } else { "\\" };
+    let udf_dir = str(tmp, sep, "goose_ui_wv_test_udf");
+
+    verify_webview_backend_smoke(goose_ui::RenderBackend.Software, "WV Software", udf_dir, true);
+    verify_webview_backend_smoke(goose_ui::RenderBackend.Direct2D, "WV Direct2D", udf_dir, false);
+    verify_webview_backend_smoke(goose_ui::RenderBackend.OpenGL, "WV OpenGL", udf_dir, false);
+    print("[OK] WebView2 live smoke across Software, Direct2D & OpenGL (eval_js=42)");
+}
+
 fn main() {
     test_tree_and_handles();
     test_layouts();
@@ -1747,5 +2044,7 @@ fn main() {
     test_window_positioning();
     test_regressions_text_scroll_and_wrap();
     test_viewport_resize_and_stretch();
+    test_webview_headless();
+    test_webview_live_smoke();
     print("ALL GOOSE_UI TESTS PASSED");
 }

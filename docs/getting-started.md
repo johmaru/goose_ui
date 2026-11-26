@@ -32,6 +32,7 @@ goose run --debug test/goose_ui_test.goose
 goose run examples/counter.goose       # Software GDI: Counter
 goose run examples/todo_app.goose      # Software GDI: Todo manager + native menu bar
 goose run examples/kitchen_sink.goose  # Direct2D GPU: All widgets + Canvas animation
+goose run examples/webview_demo.goose  # Direct2D GPU: Embedded Edge WebView2 + JS bridge + Virtual host
 ```
 
 ---
@@ -145,5 +146,5 @@ See [Widgets, Events & Native API](widgets-and-events.md#7-structured-json-loggi
 ## Next Steps
 
 - [UI DSL & Layout Guide](dsl-and-layout.md) — Scoped nested DSL, all layout containers, and `Anchor` absolute placement
-- [Widgets, Events & Native API](widgets-and-events.md) — All 21 widgets, events, native dialogs, and `Canvas`
+- [Widgets, Events & Native API](widgets-and-events.md) — All 22 widgets (including `WebView`), events, native dialogs, and `Canvas`
 - [Architecture & Performance](architecture.md) — Zero-heap design and Qt 6 comparison benchmarks

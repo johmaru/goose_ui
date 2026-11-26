@@ -545,6 +545,20 @@ fn set_theme(app: App&, t: Theme) {
             app.windows[i].dirty = true;
         }
     }
+    let wv_scheme = if t.is_dark { win32::WV_SCHEME_DARK } else { win32::WV_SCHEME_LIGHT };
+    let r = (clamp_f32(t.surface_bg.r, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+    let g = (clamp_f32(t.surface_bg.g, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+    let b = (clamp_f32(t.surface_bg.b, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+    let a = (clamp_f32(t.surface_bg.a, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+    for i in app.webviews.len {
+        if app.webviews[i].alive && app.webviews[i].color_scheme_code == 0 && app.webviews[i].handle.is_valid() {
+            app.webviews[i].handle.set_color_scheme(wv_scheme);
+            let wid = app.webviews[i].widget;
+            if app.valid_widget(wid) && !has_bg(app.widgets[wid.index].style) {
+                app.webviews[i].handle.set_background_color(r, g, b, a);
+            }
+        }
+    }
 }
 
 fn toggle_theme(app: App&) {
@@ -842,6 +856,37 @@ fn compact_i18n_bindings(app: App&, force: bool = false) {
     app.i18n_bindings.resize(write);
 }
 
+fn compact_webviews(app: App&) {
+    let n = app.webviews.len;
+    if n == 0 { return; }
+    var alive_cnt: i64 = 0;
+    for i in n {
+        if app.webviews[i].alive { alive_cnt += 1; }
+    }
+    let dead_cnt = n - alive_cnt;
+    if dead_cnt == 0 { return; }
+    if dead_cnt < 16 && dead_cnt * 2 < n {
+        var new_len = n;
+        while new_len > 0 && !app.webviews[new_len - 1].alive {
+            new_len -= 1;
+        }
+        if new_len < n {
+            app.webviews.resize(new_len);
+        }
+        return;
+    }
+    var write: i64 = 0;
+    for i in n {
+        if app.webviews[i].alive {
+            if write != i {
+                app.webviews[write] = app.webviews[i];
+            }
+            write += 1;
+        }
+    }
+    app.webviews.resize(write);
+}
+
 fn detach_widget_i18n_binding(app: App&, id: WidgetId, target_kind: u8) {
     if app.i18n_bindings.len == 0 { return; }
     var removed = false;
@@ -949,6 +994,15 @@ recursive fn destroy_widget_subtree(app: App&, id: WidgetId) {
             app.i18n_bindings[i].alive = false;
         }
     }
+    for i in app.webviews.len {
+        if app.webviews[i].alive && eq(app.webviews[i].widget, id) {
+            if app.webviews[i].handle.is_valid() {
+                app.webviews[i].handle.destroy();
+            }
+            app.webviews[i].handle = win32::WebView {};
+            app.webviews[i].alive = false;
+        }
+    }
 
     app.widgets[id.index].alive = false;
     app.free_widgets.push(id.index);
@@ -963,6 +1017,7 @@ fn destroy_widget(app: App&, id: WidgetId) {
     compact_list_items(app);
     compact_connections(app);
     compact_i18n_bindings(app);
+    compact_webviews(app);
     // Keep TabWidget selected_index in bounds if a tab page was destroyed directly.
     if app.valid_widget(parent) {
         match app.widgets[parent.index].kind {
@@ -1271,6 +1326,14 @@ fn show_window(app: App&, win: WindowId) {
 fn hide_window(app: App&, win: WindowId) {
     guard app.valid_window(win) else { return; }
     app.windows[win.index].visible = false;
+    for i in app.webviews.len {
+        if app.webviews[i].alive && eq(app.webviews[i].window, win) {
+            app.webviews[i].effective_visible = false;
+            if app.webviews[i].handle.is_valid() {
+                app.webviews[i].handle.set_visible(false);
+            }
+        }
+    }
     if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
         app.windows[win.index].hwnd.show(win32::SW_HIDE);
     }
@@ -1392,6 +1455,7 @@ fn close_window(app: App&, win: WindowId) {
         }
     }
     compact_i18n_bindings(app);
+    compact_webviews(app);
 
     if !app.windows[win.index].headless {
         destroy_window_fonts(app.windows[win.index].fonts);
@@ -2195,6 +2259,20 @@ fn set_bg(app: App&, id: WidgetId, color: Color) {
     guard app.valid_widget(id) else { return; }
     app.widgets[id.index].style.flags |= STYLE_HAS_BG;
     app.widgets[id.index].style.bg_rgba = pack_rgba(color);
+    match app.widgets[id.index].kind {
+        WebView => {
+            for i in app.webviews.len {
+                if app.webviews[i].alive && eq(app.webviews[i].widget, id) && app.webviews[i].handle.is_valid() {
+                    let r = (clamp_f32(color.r, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+                    let g = (clamp_f32(color.g, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+                    let b = (clamp_f32(color.b, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+                    let a = (clamp_f32(color.a, 0.0, 1.0) * 255.0 + 0.5) as! u8;
+                    app.webviews[i].handle.set_background_color(r, g, b, a);
+                }
+            }
+        },
+        _ => {},
+    }
     app.mark_widget_dirty(id);
 }
 
@@ -2364,6 +2442,7 @@ fn clear_items(app: App&, owner: WidgetId) {
     }
     compact_list_items(app);
     compact_i18n_bindings(app);
+    compact_webviews(app);
     app.mark_widget_layout_dirty(owner);
 }
 

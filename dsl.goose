@@ -11,6 +11,7 @@ import theme;
 import widget;
 import tree;
 import i18n;
+import webview;
 
 // Lightweight 16-byte builder cursor (compiles away to registers).
 struct Ui {
@@ -225,6 +226,15 @@ fn list_view(u: Ui, item_height: f32 = 30.0) -> Node {
 fn canvas(u: Ui, min_w: f32 = 200.0, min_h: f32 = 160.0) -> Node {
     return Node { app: u.app, id: u.app.add_canvas(u.parent, min_w, min_h) };
 }
+fn webview(u: Ui, initial_url: const u8[:] = "", min_w: f32 = 320.0, min_h: f32 = 240.0) -> Node {
+    return Node { app: u.app, id: u.app.add_webview(u.parent, initial_url, min_w, min_h) };
+}
+fn webview_html(u: Ui, initial_html: const u8[:], min_w: f32 = 320.0, min_h: f32 = 240.0) -> Node {
+    return Node { app: u.app, id: u.app.add_webview_html(u.parent, initial_html, min_w, min_h) };
+}
+fn webview_with(u: Ui, opts: WebViewOptions) -> Node {
+    return Node { app: u.app, id: u.app.add_webview_with_options(u.parent, opts) };
+}
 
 // Translated leaf widget builders (auto-retranslate when App locale changes)
 fn tr_label(u: Ui, key: const u8[:], role: FontRole = FontRole.Body) -> Node {
@@ -347,5 +357,68 @@ fn on_toggle_theme(n: Node) -> Node {
 }
 fn on_click_close(n: Node) -> Node {
     n.app.connect(n.id, SignalKind.OnClick, WIDGET_NONE, SlotAction.CloseWindow);
+    return n;
+}
+
+// WebView2 builder modifiers
+fn url(n: Node, target_url: const u8[:]) -> Node {
+    n.app.webview_navigate(n.id, target_url);
+    return n;
+}
+fn html(n: Node, markup: const u8[:]) -> Node {
+    n.app.webview_set_html(n.id, markup);
+    return n;
+}
+fn init_script(n: Node, script: const u8[:]) -> Node {
+    n.app.webview_add_init_script(n.id, script);
+    return n;
+}
+fn devtools(n: Node, enabled: bool) -> Node {
+    n.app.webview_set_devtools_enabled(n.id, enabled);
+    return n;
+}
+fn context_menu(n: Node, enabled: bool) -> Node {
+    n.app.webview_set_context_menu_enabled(n.id, enabled);
+    return n;
+}
+fn status_bar(n: Node, enabled: bool) -> Node {
+    n.app.webview_set_status_bar_enabled(n.id, enabled);
+    return n;
+}
+fn zoom_control(n: Node, enabled: bool) -> Node {
+    n.app.webview_set_zoom_control_enabled(n.id, enabled);
+    return n;
+}
+fn accelerator_keys(n: Node, enabled: bool) -> Node {
+    n.app.webview_set_accelerator_keys_enabled(n.id, enabled);
+    return n;
+}
+fn zoom(n: Node, factor: f64) -> Node {
+    n.app.webview_set_zoom(n.id, factor);
+    return n;
+}
+fn muted(n: Node, on: bool) -> Node {
+    n.app.webview_set_muted(n.id, on);
+    return n;
+}
+fn user_agent(n: Node, ua: const u8[:]) -> Node {
+    n.app.webview_set_user_agent(n.id, ua);
+    return n;
+}
+fn new_window_policy(n: Node, policy: WebViewNewWindowPolicy) -> Node {
+    n.app.webview_set_new_window_policy(n.id, policy);
+    return n;
+}
+fn color_scheme(n: Node, scheme: WebViewColorScheme) -> Node {
+    n.app.webview_set_color_scheme(n.id, scheme);
+    return n;
+}
+fn virtual_host(
+    n: Node,
+    host_name: const u8[:],
+    folder_path: const u8[:],
+    access: WebViewHostAccess = WebViewHostAccess.Allow
+) -> Node {
+    n.app.webview_set_virtual_host(n.id, host_name, folder_path, access);
     return n;
 }

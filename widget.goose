@@ -253,4 +253,10 @@ root struct App {
     i18n_entries: I18nEntry[>..] = [],
     i18n_buckets: i32[>..<] = [],
     i18n_bindings: I18nBinding[>..] = [],
+
+    // Sparse WebView2 widget table (0 bytes per non-WebView Widget)
+    webviews: WebViewState[>..] = [],
+    webview_payloads: WebViewPayload[>..] = [],
+    webview_msg_pool: u8[>..] = [],
+    webview_default_data_dir: StrSpan = StrSpan {},
 }

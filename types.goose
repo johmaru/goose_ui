@@ -256,6 +256,7 @@ enum WidgetKind {
     Splitter,
     StatusBar,
     Canvas,
+    WebView,
 }
 
 enum ButtonVariant {
@@ -332,6 +333,16 @@ enum Signal {
     WindowResized { window: WindowId, width: i32, height: i32 },
     WindowClosed { window: WindowId },
     LocaleChanged { locale_index: i32 },
+    WebViewReady { widget: WidgetId, window: WindowId },
+    WebViewInitFailed { widget: WidgetId, window: WindowId, hr: i32 },
+    WebViewNavigationStarting { widget: WidgetId, window: WindowId, payload: i32, user_initiated: bool, redirected: bool },
+    WebViewNavigationCompleted { widget: WidgetId, window: WindowId, success: bool, error_status: i32 },
+    WebViewTitleChanged { widget: WidgetId, window: WindowId },
+    WebViewSourceChanged { widget: WidgetId, window: WindowId, is_new_document: bool },
+    WebViewHistoryChanged { widget: WidgetId, window: WindowId, can_go_back: bool, can_go_forward: bool },
+    WebViewMessageReceived { widget: WidgetId, window: WindowId, payload: i32, is_json: bool },
+    WebViewScriptResult { widget: WidgetId, window: WindowId, request_id: u64, payload: i32, ok: bool },
+    WebViewNewWindowRequested { widget: WidgetId, window: WindowId, payload: i32, user_initiated: bool },
 }
 
 enum SignalKind {
@@ -468,4 +479,76 @@ struct I18nBinding {
     widget: WidgetId = WIDGET_NONE,
     item_uid: u64 = 0,
     key: StrSpan = StrSpan {},
+}
+
+// --- WebView2 Widget Types --------------------------------------------------
+
+enum WebViewNewWindowPolicy {
+    BlockAndNotify,
+    NavigateSelf,
+    OpenExternal,
+    AllowPopup,
+}
+
+enum WebViewColorScheme {
+    FollowTheme,
+    Auto,
+    Light,
+    Dark,
+}
+
+enum WebViewHostAccess {
+    Deny,
+    Allow,
+    DenyCors,
+}
+
+struct WebViewOptions {
+    url: const u8[:] = "",
+    html: const u8[:] = "",
+    user_data_dir: const u8[:] = "",
+    additional_args: const u8[:] = "",
+    devtools: bool = true,
+    context_menu: bool = true,
+    status_bar: bool = false,
+    zoom_control: bool = true,
+    accelerator_keys: bool = true,
+    new_window_policy: WebViewNewWindowPolicy = WebViewNewWindowPolicy.BlockAndNotify,
+    color_scheme: WebViewColorScheme = WebViewColorScheme.FollowTheme,
+    min_w: f32 = 320.0,
+    min_h: f32 = 240.0,
+}
+
+struct WebViewState {
+    alive: bool = false,
+    widget: WidgetId = WIDGET_NONE,
+    window: WindowId = WINDOW_NONE,
+    handle: win32::WebView = win32::WebView {},
+    ready: bool = false,
+    failed: bool = false,
+    last_hr: i32 = 0,
+    can_go_back: bool = false,
+    can_go_forward: bool = false,
+    zoom: f64 = 1.0,
+    color_scheme_code: i32 = 0, // 0=FollowTheme, 1=Auto, 2=Light, 3=Dark
+    new_window_policy_code: i32 = 0,
+    devtools: bool = true,
+    context_menu: bool = true,
+    status_bar: bool = false,
+    zoom_control: bool = true,
+    accelerator_keys: bool = true,
+    muted: bool = false,
+    effective_visible: bool = false,
+    clipped_rect: RectF = RectF {},
+    url: StrSpan = StrSpan {},
+    title: StrSpan = StrSpan {},
+    last_message: StrSpan = StrSpan {},
+    last_script_result: StrSpan = StrSpan {},
+    last_error: StrSpan = StrSpan {},
+    user_data_dir: StrSpan = StrSpan {},
+}
+
+struct WebViewPayload {
+    text: StrSpan = StrSpan {},
+    aux: StrSpan = StrSpan {},
 }

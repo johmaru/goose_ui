@@ -11,6 +11,7 @@ import tree;
 import log;
 import layout;
 import painter;
+import webview;
 
 // --- Signal Queue & Declarative Connection Execution ------------------------
 
@@ -26,6 +27,10 @@ fn next_signal(app: App&, out: Signal&) -> bool {
         if app.signals.len > 0 {
             app.signals.clear();
             app.signal_head = 0;
+        }
+        if app.webview_payloads.len > 0 {
+            app.webview_payloads.clear();
+            app.webview_msg_pool.clear();
         }
         out = Signal.None;
         return false;
@@ -222,6 +227,9 @@ fn set_focus(app: App&, win: WindowId, id: WidgetId) {
         app.windows[win.index].focused = id;
         match app.widgets[id.index].kind {
             LineEdit => { ensure_line_edit_caret_visible(app, id); },
+            WebView => {
+                if !app.windows[win.index].headless { app.webview_focus(id); }
+            },
             _ => {},
         }
         app.push_signal(Signal.FocusChanged { widget: id, window: win, focused: true });
@@ -639,6 +647,16 @@ fn handle_mouse_down(app: App&, win: WindowId, px: f32, py: f32, button: i32) {
     }
 
     let hit = app.hit_test(win, px, py);
+    if !app.windows[win.index].headless && app.webviews.len > 0 && app.windows[win.index].hwnd.is_valid() {
+        let is_wv = if app.valid_widget(hit) {
+            match app.widgets[hit.index].kind { WebView => true, _ => false }
+        } else {
+            false
+        };
+        if !is_wv {
+            app.windows[win.index].hwnd.set_focus();
+        }
+    }
     guard app.valid_widget(hit) else {
         app.set_focus(win, WIDGET_NONE);
         return;
@@ -1250,6 +1268,10 @@ fn dispatch_win32_event(app: App&, ev: const win32::Event&) {
         }
     } else if ev.msg == win32::WM_PAINT {
         app.windows[win.index].dirty = true;
+    } else if ev.msg == win32::WM_MOVE {
+        app.notify_window_webviews_moved(win);
+    } else if ev.msg == win32::WM_WEBVIEW_EVENT {
+        app.drain_webview_events();
     } else if ev.msg == win32::WM_DPICHANGED {
         app.windows[win.index].dpi = ev.x as! u32;
         if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
@@ -1354,6 +1376,9 @@ fn pump_events(app: App&, blocking: bool = true) -> bool {
     }
     while app.running && win32::poll_event(ev) {
         dispatch_win32_event(app, ev);
+    }
+    if app.webviews.len > 0 {
+        app.drain_webview_events();
     }
     return app.running;
 }

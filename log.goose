@@ -941,6 +941,13 @@ fn log_fatal_with<F>(app: App&, target: const u8[:], msg: const u8[:]) -> bool {
 
 // --- Automatic / Manual UI Signal Logging -----------------------------------
 
+fn log_wv_span(app: const App&, sp: StrSpan) -> const u8[:] {
+    if sp.len <= 0 || sp.off < 0 || sp.off + sp.len > app.webview_msg_pool.len {
+        return "";
+    }
+    return app.webview_msg_pool[sp.off..sp.off + sp.len];
+}
+
 fn log_signal(app: App&, sig: Signal) {
     guard log_should_emit(app.log, 1) else { return; }
 
@@ -972,6 +979,16 @@ fn log_signal(app: App&, sig: Signal) {
         WindowResized s => { sig_name = "WindowResized"; win = s.window; },
         WindowClosed s => { sig_name = "WindowClosed"; win = s.window; },
         LocaleChanged _s => { sig_name = "LocaleChanged"; },
+        WebViewReady s => { sig_name = "WebViewReady"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewInitFailed s => { sig_name = "WebViewInitFailed"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewNavigationStarting s => { sig_name = "WebViewNavigationStarting"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewNavigationCompleted s => { sig_name = "WebViewNavigationCompleted"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewTitleChanged s => { sig_name = "WebViewTitleChanged"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewSourceChanged s => { sig_name = "WebViewSourceChanged"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewHistoryChanged s => { sig_name = "WebViewHistoryChanged"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewMessageReceived s => { sig_name = "WebViewMessageReceived"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewScriptResult s => { sig_name = "WebViewScriptResult"; win = s.window; wid = s.widget; has_widget = true; },
+        WebViewNewWindowRequested s => { sig_name = "WebViewNewWindowRequested"; win = s.window; wid = s.widget; has_widget = true; },
     }
 
     var buf: u8[>..] = [];
@@ -1019,6 +1036,42 @@ fn log_signal(app: App&, sig: Signal) {
                 if sp.len > 0 && sp.off >= 0 && sp.off + sp.len <= app.i18n_pool.len {
                     f.text("locale", app.i18n_pool[sp.off..sp.off + sp.len]);
                 }
+            }
+        },
+        WebViewInitFailed s => { f.int("hr", s.hr); },
+        WebViewNavigationStarting s => {
+            f.flag("user_initiated", s.user_initiated);
+            f.flag("redirected", s.redirected);
+            if s.payload >= 0 && s.payload < app.webview_payloads.len {
+                let u = log_wv_span(app, app.webview_payloads[s.payload].text);
+                if u.len > 0 { f.text("url", u); }
+            }
+        },
+        WebViewNavigationCompleted s => { f.flag("success", s.success); f.int("error_status", s.error_status); },
+        WebViewSourceChanged s => { f.flag("is_new_document", s.is_new_document); },
+        WebViewHistoryChanged s => { f.flag("can_go_back", s.can_go_back); f.flag("can_go_forward", s.can_go_forward); },
+        WebViewMessageReceived s => {
+            f.flag("is_json", s.is_json);
+            if s.payload >= 0 && s.payload < app.webview_payloads.len {
+                let msg = log_wv_span(app, app.webview_payloads[s.payload].text);
+                if msg.len > 0 { f.text("payload", msg); }
+                let src = log_wv_span(app, app.webview_payloads[s.payload].aux);
+                if src.len > 0 { f.text("source", src); }
+            }
+        },
+        WebViewScriptResult s => {
+            f.uint("request_id", s.request_id);
+            f.flag("ok", s.ok);
+            if s.payload >= 0 && s.payload < app.webview_payloads.len {
+                let res = log_wv_span(app, app.webview_payloads[s.payload].text);
+                if res.len > 0 { f.text("result", res); }
+            }
+        },
+        WebViewNewWindowRequested s => {
+            f.flag("user_initiated", s.user_initiated);
+            if s.payload >= 0 && s.payload < app.webview_payloads.len {
+                let u = log_wv_span(app, app.webview_payloads[s.payload].text);
+                if u.len > 0 { f.text("url", u); }
             }
         },
         _ => {},

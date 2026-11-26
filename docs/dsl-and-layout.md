@@ -74,6 +74,9 @@ Available `Ui` methods:
 Translated `Ui` builders (auto-retranslate when `app.set_locale(...)` switches languages):
 `tr_label`, `tr_button`, `tr_checkbox`, `tr_radio`, `tr_toggle`, `tr_line_edit`, `tr_group_box`, `tr_tab`.
 
+Embedded browser (`WebView2`) builders & modifiers:
+`webview`, `webview_html`, `webview_with`, and `.url`, `.html`, `.init_script`, `.devtools`, `.context_menu`, `.status_bar`, `.zoom_control`, `.accelerator_keys`, `.zoom`, `.user_agent`, `.new_window_policy`, `.color_scheme`, `.virtual_host`.
+
 ---
 
 ## 3. Two-Pass Layout Engine

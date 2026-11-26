@@ -10,6 +10,7 @@ import theme;
 import widget;
 import tree;
 import layout;
+import webview;
 
 // Win32 GDI clipping & text flags not exposed in win32-goose's constants.
 let DT_NOPREFIX: u32 = 0x00000800;
@@ -1102,6 +1103,19 @@ fn paint_single_widget(app: const App&, win_idx: i32, id: WidgetId, p: const Pai
             let bd = if is_focused { t.border_focus } else if has_border(w.style) { unpack_rgba(w.style.border_rgba) } else { t.border };
             p.fill_rounded_rect(r.x, r.y, r.w, r.h, rad, bg);
             p.draw_rounded_rect(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, rad, bd, 1.0);
+        },
+        WebView => {
+            let bg = if has_bg(w.style) { unpack_rgba(w.style.bg_rgba) } else { t.surface_bg };
+            let bd = if is_focused { t.border_focus } else if has_border(w.style) { unpack_rgba(w.style.border_rgba) } else { t.border };
+            p.fill_rounded_rect(r.x, r.y, r.w, r.h, rad, bg);
+            p.draw_rounded_rect(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, rad, bd, 1.0);
+            if app.webview_has_failed(id) {
+                let err_msg = app.webview_last_error(id);
+                let label = if err_msg.len > 0 { err_msg } else { "WebView2 Runtime unavailable" };
+                p.draw_text(label, r.x + 12.0, r.y + 12.0, r.w - 24.0, r.h - 24.0, t.danger, FontRole.Body, Align.Center, Align.Center);
+            } else if !app.webview_is_ready(id) {
+                p.draw_text("Loading WebView...", r.x + 12.0, r.y + 12.0, r.w - 24.0, r.h - 24.0, t.text_muted, FontRole.Caption, Align.Center, Align.Center);
+            }
         },
     }
 }

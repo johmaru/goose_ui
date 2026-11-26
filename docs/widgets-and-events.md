@@ -2,7 +2,7 @@
 
 ---
 
-## 1. Widget Catalog (21 Retained Widgets)
+## 1. Widget Catalog (22 Retained Widgets)
 
 ### Containers & Structural Widgets
 `Panel`, `Frame`, `GroupBox`, `Spacer`, `Separator`, `TabWidget`, `ScrollArea`, `Splitter`, `StatusBar`
@@ -23,6 +23,7 @@
 | `u.combo_box()` | Dropdown selector with top-level floating overlay, wheel scrolling for >8 items, `Esc` / `Space` / `Enter` support, and `.item(text)` |
 | `u.list_view(item_height = 30.0)` | Virtualized scrollable list with primary text, subtext, `item_tag`, keyboard navigation with auto-scroll, and double-click activation |
 | `u.canvas(min_w = 200.0, min_h = 160.0)` | Custom 2D vector & text drawing surface with local mouse and wheel events |
+| `u.webview(url = "", min_w = 320.0, min_h = 240.0)` | Embedded Microsoft Edge WebView2 browser (`u.webview_html`, `u.webview_with`, JS bridge, virtual host mapping, and viewport clipping) |
 
 ### Status Bar
 
@@ -77,6 +78,12 @@ The loop blocks in `win32::wait_event`, keeping **idle CPU usage at 0%** and rep
 | `FilesDropped` | Files dropped onto window (requires `app.enable_drop_files(win)`) | `window`, `count` |
 | `WindowResized` / `WindowClosed` | Window resize or close request | `window`, (`width`, `height`) |
 | `LocaleChanged` | Active i18n locale changed via `app.set_locale(...)` | `locale_index` |
+| `WebViewReady` / `WebViewInitFailed` | Async WebView2 controller initialization result | `widget`, `window`, (`hr`) |
+| `WebViewNavigationStarting` / `Completed` | Navigation start and completion | `widget`, `window`, (`payload`, `user_initiated`, `redirected` / `success`, `error_status`) |
+| `WebViewTitleChanged` / `SourceChanged` / `HistoryChanged` | Document title, URI, or back/forward history updates | `widget`, `window`, (`is_new_document` / `can_go_back`, `can_go_forward`) |
+| `WebViewMessageReceived` | JS message posted via `window.chrome.webview.postMessage(...)` | `widget`, `window`, `payload`, `is_json` |
+| `WebViewScriptResult` | Async completion of `webview_eval_js(...)` | `widget`, `window`, `request_id`, `payload`, `ok` |
+| `WebViewNewWindowRequested` | Popup / new window interception (`WebViewNewWindowPolicy`) | `widget`, `window`, `payload`, `user_initiated` |
 
 ### Win32-Style Action ID Dispatch
 
@@ -292,4 +299,17 @@ while app.next_signal(sig) {
 ```
 
 Synthetic injection helpers:
-`inject_mouse_move`, `inject_click`, `inject_mouse_down`, `inject_mouse_up`, `inject_mouse_wheel`, `inject_key`, `inject_char`, `inject_text`.
+`inject_mouse_move`, `inject_click`, `inject_mouse_down`, `inject_mouse_up`, `inject_mouse_wheel`, `inject_key`, `inject_char`, `inject_text`, `inject_webview_ready`, `inject_webview_navigation`, `inject_webview_title`, `inject_webview_message`, `inject_webview_script_result`.
+
+---
+
+## 10. Embedded WebView (`WebView2`)
+
+`WidgetKind.WebView` embeds Microsoft Edge WebView2 directly inside any `goose_ui` layout ([`webview.goose`](../webview.goose)):
+
+- **Zero external loader DLLs**: When `WebView2Loader.dll` is not alongside the executable, `win32-goose` discovers the installed Edge WebView2 Runtime (`EBWebView\x64\EmbeddedBrowserWebView.dll`) directly in C, keeping single-file `.exe` builds intact.
+- **Zero overhead when unused**: WebView2 state lives in sparse `App.webviews` tables and loads `EmbeddedBrowserWebView.dll` lazily only when a `WebView` is created.
+- **Navigation & state**: `webview_navigate`, `webview_set_html`, `webview_reload`, `webview_stop`, `webview_go_back`, `webview_go_forward`, `webview_can_go_back`, `webview_can_go_forward`, `webview_url`, `webview_title`, `webview_is_ready`, `webview_has_failed`, `webview_last_error`.
+- **Bidirectional JS bridge**: `webview_eval_js` (returns `request_id` matched against `WebViewScriptResult`), `webview_add_init_script`, `webview_post_json`, `webview_post_string`, `webview_payload(s.payload)`, and `webview_payload_source(s.payload)`. Transient payload buffers are cleared automatically once drained by `app.next_signal(sig)`.
+- **Theme, settings & virtual hosts**: Automatic Dark/Light scheme and background sync (`WebViewColorScheme.FollowTheme`), `webview_set_zoom`, `webview_set_muted`, `webview_is_muted`, `webview_is_playing_audio`, `webview_set_devtools_enabled` / `webview_open_devtools`, `webview_set_context_menu_enabled`, `webview_set_status_bar_enabled`, `webview_set_zoom_control_enabled`, `webview_set_accelerator_keys_enabled`, `webview_set_user_agent`, `webview_set_new_window_policy`, `webview_set_virtual_host`, `webview_clear_virtual_host`.
+- **Container & airspace notes**: `sync_window_webviews` automatically hides inactive `TabWidget` / `Stack` pages and clips child `HWND`s against `ScrollArea` viewports via `SetWindowRgn`. Because WebView2 uses a native Win32 child `HWND`, overlapping `goose_ui`-painted `ComboBox` dropdowns or hover tooltips render beneath the native child `HWND` (standard Win32 airspace behavior).

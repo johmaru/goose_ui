@@ -8,6 +8,7 @@ import types;
 import theme;
 import widget;
 import tree;
+import webview;
 
 fn is_expanding(p: SizePolicy) -> bool {
     return match p { Expanding => true, _ => false };
@@ -156,6 +157,9 @@ recursive fn measure_widget(app: App&, id: WidgetId) -> SizeF {
         },
         Canvas => {
             hint = SizeF { w: 240.0, h: 180.0 };
+        },
+        WebView => {
+            hint = SizeF { w: 320.0, h: 240.0 };
         },
         TabWidget => {
             var max_w: f32 = 220.0;
@@ -830,6 +834,8 @@ fn update_layout(app: App&, win: WindowId, force: bool = false) {
             _ => {},
         }
     }
+
+    app.sync_window_webviews(win);
 
     app.windows[win.index].layout_dirty = false;
     app.windows[win.index].dirty = true;

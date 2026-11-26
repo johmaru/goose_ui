@@ -21,6 +21,8 @@ root struct App
  ├── focus_order:  WidgetId[>..<]   // Cached Tab traversal order
  ├── log:           LogState         // Optional user-path JSON logger state
  ├── log_path_span: StrSpan          // Pooled path in App.str_pool (0 bytes when unused)
+ ├── webviews:      WebViewState[>..] // Sparse native WebView2 slots (0 entries when unused)
+ ├── webview_*      payload pools    // Per-drain WebView message/result payload & string pools
  └── i18n_*         I18n tables      // Translation pool, locales, O(1) hash entries & sparse live bindings
 ```
 
@@ -104,6 +106,7 @@ goose_ui.goose (public entry point)
  ├── widget.goose   (Widget, Window, ListItem, TimerInfo, root struct App)
  ├── tree.goose     (lifecycle, window positioning, str_pool, font caches, add_*/set_*, connect)
  ├── log.goose      (structured JSON logging, rotation, JsonLogger, log reader)
+ ├── webview.goose  (WebView2 wrapper, layout/clip sync, JS bridge payloads, inject_webview_*)
  ├── layout.goose   (two-pass layout engine & Anchor absolute positioning)
  ├── painter.goose  (Software GDI / Direct2D dual painter & widget renderers)
  ├── events.goose   (hit testing, focus, input editing, event loop, inject_*)

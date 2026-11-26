@@ -10,12 +10,13 @@ A **zero-heap, dual-backend retained-mode GUI framework** for the [Goose](https:
 - **Two-pass Qt-style layout engine** — Intrinsic `size_hint` measurement + top-down arrangement:
   - `VBox`, `HBox` (proportional `stretch` & `SizePolicy`), `Grid`, `Form`, `Stack`
   - `Splitter` (draggable horizontal/vertical panes), `ScrollArea`, `TabWidget`, `GroupBox`, `Frame`, `Panel`, `Spacer`, `Separator`, docked `StatusBar`, and `LayoutKind.None` (`Anchor`)
-- **21 Retained Widgets with Full UTF-8 / CJK Support** — Hover/pressed/disabled states, focus rings, Tab/Shift+Tab keyboard navigation, and hover tooltips:
+- **22 Retained Widgets with Full UTF-8 / CJK Support** — Hover/pressed/disabled states, focus rings, Tab/Shift+Tab keyboard navigation, and hover tooltips:
   - `Label`, `Button` (5 variants + checkable toggle), `CheckBox`, `RadioButton` (auto-exclusive), `ToggleSwitch`
   - `LineEdit` (UTF-8 & surrogate-pair emoji input, selection, Home/End/Arrows, Copy/Cut/Paste via Windows Clipboard, password mode, placeholder)
   - `Slider` (horizontal/vertical, drag/wheel/arrows), `SpinBox`, `ProgressBar`
   - `ComboBox` (floating top-level dropdown overlay), `ListView` (virtualized scrolling, keyboard nav, double-click activation)
   - `Canvas` (custom `QPainter`-style 2D vector & text drawing surface inside any layout, working on both GDI and Direct2D)
+  - `WebView` (embedded Microsoft Edge WebView2 browser with HTML/URL navigation, bidirectional JS ⇔ Goose bridge, virtual host mapping, Dark/Light theme sync, and `TabWidget`/`Stack`/`ScrollArea` viewport clipping; zero external `WebView2Loader.dll` required)
 - **Native Windows 11 Integration** — DWM dark titlebar synced with live Dark/Light theme switching, rounded corners, configurable startup window positioning (`WindowPosition.CenterPrimary` / `CenterMonitor` / `Manual`) & `center_window`, native Win32 MenuBar & Context Menus, Common Dialogs (Open/Save/Folder/Color/Input/MessageBox), Clipboard, `QTimer`-style timers, and Drag & Drop files.
 - **Structured JSON Logging (`log.goose`)** — User-specified output path (auto-creating parent directories), `JsonLines` (NDJSON) and `JsonArray` formats, size-based file rotation, fluent `LogFields`/`LogArray` builders, `App`-integrated & standalone `JsonLogger` APIs, optional automatic `Signal` tracing, and `each_json_log_entry`.
 - **Multi-Language / i18n (`i18n.goose`)** — Zero-heap translation catalogs (`App`-integrated & standalone `Translator`), flat/nested/bundle JSON & directory (`*.json`) loading, Windows OS locale detection (`system_locale` / `system_language`), BCP-47 hierarchical fallback, named & positional template interpolation (`tr_fmt`, `tr1`–`tr3`), and instant live widget re-translation via `.tr_*` DSL bindings & `Signal.LocaleChanged`.
@@ -26,7 +27,7 @@ A **zero-heap, dual-backend retained-mode GUI framework** for the [Goose](https:
 | --- | --- |
 | [Getting Started (`docs/getting-started.md`)](docs/getting-started.md) | Prerequisites, submodule setup, backend selection, minimal app lifecycle, and standalone `.exe` builds |
 | [UI DSL & Layout Guide (`docs/dsl-and-layout.md`)](docs/dsl-and-layout.md) | Scoped nested DSL, all layout containers, two-pass layout rules, Win32/WinForms-style `Anchor` absolute placement, and low-level API |
-| [Widgets, Events & Native API (`docs/widgets-and-events.md`)](docs/widgets-and-events.md) | All 21 widgets, fluent modifiers, `Signal` dispatch, Win32 action IDs, declarative `connect`, `Canvas`/`Painter`, native dialogs/menus, and headless testing |
+| [Widgets, Events & Native API (`docs/widgets-and-events.md`)](docs/widgets-and-events.md) | All 22 widgets (including `WebView`), fluent modifiers, `Signal` dispatch, Win32 action IDs, declarative `connect`, `Canvas`/`Painter`, native dialogs/menus, and headless testing |
 | [Architecture & Performance (`docs/architecture.md`)](docs/architecture.md) | Zero-heap `root struct App`, generational handles, `str_pool` + `StrSpan`, Software GDI / Direct2D dual backends, and benchmark methodology |
 | [Developer & Agent Guide (`Agent.md`)](Agent.md) | Maintenance invariants, Goose v2026.4 compiler caveats, and verification commands |
 
@@ -161,6 +162,7 @@ pwsh -File bench/run_bench.ps1
 - `widget.goose` — Retained `Widget`, `ListItem`, `Window`, `TimerInfo`, and `root struct App` (with `str_pool`)
 - `tree.goose` — Window & widget lifecycle, string pool, GDI/D2D font caches, constructors, property getters/setters, Win32-style ID lookups, `connect`
 - `log.goose` — Structured JSON logging (`JsonLines` / `JsonArray`, rotation, `LogFields`, `JsonLogger`, `App` integration, `each_json_log_entry`)
+- `webview.goose` — Embedded WebView2 widget API (`add_webview*`, navigation, JS bridge payloads, virtual hosts, `TabWidget`/`ScrollArea` sync, and `inject_webview_*` headless helpers)
 - `layout.goose` — Two-pass Qt-style layout engine (`measure_widget` / `layout_widget`) + `Anchor` absolute positioning
 - `painter.goose` — Dual-backend `Painter` (Software GDI + ClearType & Direct2D + DirectWrite), widget renderers, overlays & tooltips
 - `events.goose` — Hit testing, focus traversal, LineEdit/Slider/Splitter/List/Tab interaction, event loop, synthetic test injection
@@ -169,6 +171,6 @@ pwsh -File bench/run_bench.ps1
 - `dsl.goose` — SwiftUI/Compose-style scoped nested UI builder (`app.ui(win) { u => ... }`), `.tr_*` i18n builders, fluent modifiers, Win32 action IDs, and `Anchor` placement
 - `win32-goose/` — Git submodule ([`johmaru/win32-goose`](https://github.com/johmaru/win32-goose))
 - `docs/` — Guides and API references
-- `examples/` — `counter.goose`, `todo_app.goose`, `kitchen_sink.goose`
+- `examples/` — `counter.goose`, `todo_app.goose`, `kitchen_sink.goose`, `webview_demo.goose`
 - `bench/` — Reproducible memory & latency benchmarks (`goose_ui_bench.goose`, `qt6_bench.cpp`, `qt6_quick_bench.cpp`, `tk_bench.py`, `run_bench.ps1`)
 - `test/goose_ui_test.goose` — Automated test suite

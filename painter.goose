@@ -1334,8 +1334,33 @@ fn paint_overlays(app: const App&, win_idx: i32, p: const Painter&) {
     }
 }
 
+fn sync_window_client_size(app: App&, win: WindowId) {
+    guard app.valid_window(win) else { return; }
+    if app.windows[win.index].headless || !app.windows[win.index].hwnd.is_valid() {
+        return;
+    }
+    let rc = app.windows[win.index].hwnd.client_rect();
+    let cw = rc.width();
+    let ch = rc.height();
+    if cw <= 0 || ch <= 0 { return; }
+    if cw != app.windows[win.index].width || ch != app.windows[win.index].height {
+        app.windows[win.index].width = cw;
+        app.windows[win.index].height = ch;
+        if app.windows[win.index].d2d.is_valid() {
+            app.windows[win.index].d2d.resize(cw, ch);
+        } else if app.windows[win.index].gl2d.is_valid() {
+            app.windows[win.index].gl2d.resize(cw, ch);
+        }
+        app.windows[win.index].open_combo = WIDGET_NONE;
+        app.windows[win.index].open_combo_hover = -1;
+        app.windows[win.index].open_combo_scroll = 0;
+        app.windows[win.index].layout_dirty = true;
+    }
+}
+
 fn render_window_with<OnCanvas>(app: App&, win: WindowId) {
     guard app.valid_window(win) else { return; }
+    sync_window_client_size(app, win);
     app.update_layout(win);
 
     if app.windows[win.index].headless {

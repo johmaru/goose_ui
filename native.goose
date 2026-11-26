@@ -75,6 +75,12 @@ fn refresh_menu_bar(app: App&, win: WindowId) {
 fn show_context_menu(app: App&, win: WindowId, menu: MenuHandle, client_x: i32, client_y: i32) -> u32 {
     guard app.valid_window(win) && menu.is_valid() else { return 0; }
     if app.windows[win.index].headless { return 0; }
+    if app.valid_widget(app.windows[win.index].captured) {
+        app.windows[win.index].captured = WIDGET_NONE;
+        win32::release_capture();
+    }
+    app.windows[win.index].mouse_down = false;
+    app.windows[win.index].pressed = WIDGET_NONE;
     return menu.raw.track_popup_client(app.windows[win.index].hwnd, client_x, client_y);
 }
 

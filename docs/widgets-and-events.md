@@ -158,9 +158,9 @@ app.exec_with_canvas(paint_canvas) { sig =>
 - **Clipboard**: `clipboard_text() -> u8[>..]`, `set_clipboard_text(text)`
 - **Timers (`QTimer`)**: `start_timer(app, win, interval_ms, single_shot = false) -> u64`, `stop_timer(app, timer_id)`
 - **Drag & Drop**: `app.enable_drop_files(win, true)` → query `dropped_file_count()` and `dropped_file_path(i)` on `FilesDropped`
-- **Window Positioning**:
+- **Window Positioning & Constraints**:
   - Startup defaults (`App`): `set_window_start_position(WindowPosition)` (`SystemDefault`, `CenterPrimary`, `CenterMonitor`, `Manual`), `set_center_on_primary_display(enabled = true)`, `set_window_start_monitor(index)`, `set_window_start_position_manual(x, y)`, `window_start_position() -> WindowPosition`
-  - Runtime positioning: `center_window(win)`, `center_window_on_monitor(win, index)`, `set_window_position(win, x, y)`, `window_position(win) -> x, y`
+  - Runtime positioning & sizing: `center_window(win)`, `center_window_on_monitor(win, index)`, `set_window_position(win, x, y)`, `window_position(win) -> x, y`, `set_window_min_size(win, min_w, min_h)` (`WM_GETMINMAXINFO` enforcement; render loop also yields live frames during interactive Win32 resize drags and auto-syncs Direct2D/OpenGL/GDI viewports on resize/DPI changes)
   - Work area & geometry helpers: `primary_work_area() -> win32::Rect`, `monitor_work_area(index) -> win32::Rect`, `compute_centered_pos(work, win_w, win_h) -> x, y`
 
 ---

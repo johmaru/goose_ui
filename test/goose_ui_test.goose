@@ -1591,6 +1591,145 @@ fn test_regressions_text_scroll_and_wrap() {
     print("[OK] LineEdit horizontal scroll, DirectWrite font metrics, wrapped Label & D2D hardware clipping");
 }
 
+fn test_viewport_resize_and_stretch() {
+    // 1. Headless multi-column HBox vertical container stretch + compact VBox centering + ScrollArea max_size
+    {
+        var app = goose_ui::App { .. };
+        let win = app.create_headless_window("ResizeStretchHL", 800, 600);
+        let _sb = app.set_status_bar(win, "Ready");
+
+        var exp_col = goose_ui::WIDGET_NONE;
+        var exp_canvas = goose_ui::WIDGET_NONE;
+        var compact_col = goose_ui::WIDGET_NONE;
+        var capped_row = goose_ui::WIDGET_NONE;
+        app.ui(win) { u =>
+            u.padding(0.0).spacing(0.0);
+            u.hbox(0.0, 0.0) { row =>
+                row.stretch(1.0);
+                row.vbox(6.0, 8.0) { c0 =>
+                    c0.width(240.0).bind(exp_col);
+                    c0.label("Header");
+                    c0.canvas(120.0, 80.0).stretch(1.0).bind(exp_canvas);
+                };
+                row.vbox(4.0, 8.0) { c1 =>
+                    c1.width(120.0).bind(compact_col);
+                    c1.label("Line 1");
+                    c1.label("Line 2");
+                };
+                row.scroll_area(8.0, 12.0) { sc =>
+                    sc.stretch(1.0);
+                    sc.hbox(8.0) { hr =>
+                        hr.max_size(400.0, 34.0).bind(capped_row);
+                        hr.button("A").height(34.0).stretch(1.0);
+                        hr.button("B").height(34.0).stretch(1.0);
+                    };
+                };
+            };
+        };
+
+        let widths: i32[3] = [800, 1400, 640];
+        let heights: i32[3] = [600, 900, 480];
+        for i in 0..3 {
+            app.windows[win.index].width = widths[i];
+            app.windows[win.index].height = heights[i];
+            app.update_layout(win, true);
+
+            let exp_h = heights[i] - 26.0;
+            let rexp = app.widget_rect(exp_col);
+            let rcomp = app.widget_rect(compact_col);
+            let rcap = app.widget_rect(capped_row);
+            assert(approx(rexp.y, 0.0) && approx(rexp.h, exp_h));
+            assert(app.widget_rect(exp_canvas).h > exp_h * 0.7);
+            // Fixed-label VBox without expanding descendants stays compact & vertically centered
+            assert(rcomp.h < exp_h * 0.5 && rcomp.y > 40.0);
+            // ScrollArea child honors max_size.w when wider and shrinks cleanly when narrower
+            let sc_inner_w = widths[i] - 240.0 - 120.0 - 24.0 - 10.0;
+            let exp_cap_w = if sc_inner_w < 400.0 { sc_inner_w } else { 400.0 };
+            assert(approx(rcap.w, exp_cap_w, 1.5));
+        }
+
+        app.destroy_all();
+    }
+
+    // 2. Real Win32 Direct2D window resize -> syncs Window, D2D surface pixel_size, root & StatusBar
+    {
+        var app = goose_ui::App { .. };
+        app.init(true, goose_ui::RenderBackend.Direct2D);
+        let win = app.create_window("D2DResizeTest", 480, 320);
+        assert(app.valid_window(win));
+        let root = app.root(win);
+        app.set_status_bar(win, "D2D Resize");
+        app.ui(win) { u =>
+            u.padding(8.0);
+            u.canvas(100.0, 60.0).stretch(1.0);
+        };
+        app.windows[win.index].visible = true;
+        app.render_window(win);
+
+        let wrc = app.hwnd(win).window_rect();
+        assert(app.hwnd(win).move(wrc.left, wrc.top, wrc.width() + 200, wrc.height() + 140, false));
+        app.render_window(win);
+
+        let rc1 = app.hwnd(win).client_rect();
+        assert(app.windows[win.index].width == rc1.width() && app.windows[win.index].height == rc1.height());
+        let pw, ph = app.windows[win.index].d2d.pixel_size();
+        assert(pw == rc1.width() && ph == rc1.height());
+        let r_root = app.widget_rect(root);
+        assert(approx(r_root.w, rc1.width()) && approx(r_root.h, rc1.height() - 26.0));
+        app.destroy_all();
+    }
+
+    // 3. Real Win32 OpenGL window resize -> expanded viewport renders to right/bottom edge
+    {
+        var app = goose_ui::App { .. };
+        app.init(true, goose_ui::RenderBackend.OpenGL);
+        let win = app.create_window("GLResizeTest", 360, 240);
+        assert(app.valid_window(win));
+        var cv = goose_ui::WIDGET_NONE;
+        app.ui(win) { u =>
+            u.padding(0.0);
+            u.canvas(100.0, 100.0).stretch(1.0).bind(cv);
+        };
+        app.windows[win.index].visible = true;
+        app.render_window(win);
+
+        let wrc = app.hwnd(win).window_rect();
+        assert(app.hwnd(win).move(wrc.left, wrc.top, wrc.width() + 240, wrc.height() + 180, false));
+        let rc1 = app.hwnd(win).client_rect();
+        var px: u32 = 0;
+        var read_ok = false;
+        app.render_window_with(win) { cid, p =>
+            if goose_ui::eq(cid, cv) {
+                p.fill_rect(p.width - 40.0, p.height - 40.0, 32.0, 32.0, goose_ui::rgb(34, 211, 238));
+                read_ok = p.gl2d.readback_pixel(rc1.width() - 24, rc1.height() - 24, px);
+            }
+        };
+        assert(read_ok);
+        let rch = px & 0xFF;
+        let gch = (px >> 8) & 0xFF;
+        let bch = (px >> 16) & 0xFF;
+        assert(rch <= 45 && gch >= 200 && bch >= 225);
+        app.destroy_all();
+    }
+
+    // 4. Real Win32 Software GDI resize + set_window_min_size enforcement
+    {
+        var app = goose_ui::App { .. };
+        app.init(true, goose_ui::RenderBackend.Software);
+        let win = app.create_window("SWMinSizeTest", 480, 320);
+        assert(app.valid_window(win));
+        app.set_window_min_size(win, 360, 260);
+        let wrc = app.hwnd(win).window_rect();
+        assert(app.hwnd(win).move(wrc.left, wrc.top, 160, 120, false));
+        app.windows[win.index].visible = true;
+        app.render_window(win);
+        assert(app.windows[win.index].width >= 360 && app.windows[win.index].height >= 260);
+        app.destroy_all();
+    }
+
+    print("[OK] viewport resize stretch (HBox containers, ScrollArea max_size, D2D/GL/SW & min_size)");
+}
+
 fn main() {
     test_tree_and_handles();
     test_layouts();
@@ -1607,5 +1746,6 @@ fn main() {
     test_i18n();
     test_window_positioning();
     test_regressions_text_scroll_and_wrap();
+    test_viewport_resize_and_stretch();
     print("ALL GOOSE_UI TESTS PASSED");
 }

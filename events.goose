@@ -1240,6 +1240,10 @@ fn dispatch_win32_event(app: App&, ev: const win32::Event&) {
             } else if app.windows[win.index].gl2d.is_valid() {
                 app.windows[win.index].gl2d.resize(ev.width, ev.height);
             }
+            app.windows[win.index].open_combo = WIDGET_NONE;
+            app.windows[win.index].open_combo_hover = -1;
+            app.windows[win.index].open_combo_scroll = 0;
+            cancel_tooltip_timer(app, win);
             app.windows[win.index].layout_dirty = true;
             app.windows[win.index].dirty = true;
             app.push_signal(Signal.WindowResized { window: win, width: ev.width, height: ev.height });
@@ -1248,6 +1252,27 @@ fn dispatch_win32_event(app: App&, ev: const win32::Event&) {
         app.windows[win.index].dirty = true;
     } else if ev.msg == win32::WM_DPICHANGED {
         app.windows[win.index].dpi = ev.x as! u32;
+        if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
+            let rc = app.windows[win.index].hwnd.client_rect();
+            let cw = rc.width();
+            let ch = rc.height();
+            if cw > 0 && ch > 0 {
+                let size_changed = cw != app.windows[win.index].width || ch != app.windows[win.index].height;
+                app.windows[win.index].width = cw;
+                app.windows[win.index].height = ch;
+                if app.windows[win.index].d2d.is_valid() {
+                    app.windows[win.index].d2d.resize(cw, ch);
+                } else if app.windows[win.index].gl2d.is_valid() {
+                    app.windows[win.index].gl2d.resize(cw, ch);
+                }
+                if size_changed {
+                    app.push_signal(Signal.WindowResized { window: win, width: cw, height: ch });
+                }
+            }
+        }
+        app.windows[win.index].open_combo = WIDGET_NONE;
+        app.windows[win.index].open_combo_hover = -1;
+        app.windows[win.index].open_combo_scroll = 0;
         app.windows[win.index].layout_dirty = true;
         app.windows[win.index].dirty = true;
     } else if ev.msg == win32::WM_MOUSEMOVE {

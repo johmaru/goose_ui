@@ -25,6 +25,31 @@ fn child_stretch_v(w: const Widget&) -> f32 {
     return if is_expanding(w.policy_v) { 1.0 } else { 0.0 };
 }
 
+recursive fn container_wants_expand_v(app: const App&, id: WidgetId) -> bool {
+    guard app.valid_widget(id) && app.widgets[id.index].visible else { return false; }
+    if app.widgets[id.index].fixed_h >= 0.0 { return false; }
+    if is_expanding(app.widgets[id.index].policy_v) { return true; }
+    match app.widgets[id.index].kind {
+        Panel, Frame, GroupBox => {
+            let is_vbox = match app.widgets[id.index].layout { VBox => true, _ => false };
+            var ch = app.widgets[id.index].first_child;
+            while app.valid_widget(ch) {
+                if app.widgets[ch.index].visible {
+                    if is_vbox && app.widgets[ch.index].fixed_h < 0.0 && app.widgets[ch.index].stretch > 0.0 {
+                        return true;
+                    }
+                    if container_wants_expand_v(app, ch) {
+                        return true;
+                    }
+                }
+                ch = app.widgets[ch.index].next_sibling;
+            }
+            return false;
+        },
+        _ => { return false; },
+    }
+}
+
 fn effective_padding(app: const App&, id: WidgetId) -> Margins {
     var pd = app.widgets[id.index].padding;
     match app.widgets[id.index].kind {
@@ -459,12 +484,16 @@ recursive fn layout_widget(app: App&, id: WidgetId, bounds: RectF) {
                 if app.widgets[ch.index].visible {
                     if vis > 0 { cy += sp; }
                     let ch_h = app.widgets[ch.index].size_hint.h;
-                    let cx, cw = align_span(
+                    let min_w = if app.widgets[ch.index].min_size.w < view_w { app.widgets[ch.index].min_size.w } else { view_w };
+                    let cx, cw = align_span_clamped(
                         bounds.x + pd.left,
                         view_w,
                         app.widgets[ch.index].size_hint.w,
                         app.widgets[ch.index].align_h,
-                        is_expanding(app.widgets[ch.index].policy_h)
+                        is_expanding(app.widgets[ch.index].policy_h) && app.widgets[ch.index].fixed_w < 0.0,
+                        min_w,
+                        app.widgets[ch.index].max_size.w,
+                        app.widgets[ch.index].fixed_w
                     );
                     layout_widget(app, ch, RectF { x: cx, y: cy, w: cw, h: ch_h });
                     cy += ch_h;
@@ -588,8 +617,9 @@ recursive fn layout_container_children(app: App&, id: WidgetId, inner: RectF) {
                         ch_w = clamp_f32(ch_w, app.widgets[ch.index].min_size.w, app.widgets[ch.index].max_size.w);
                     }
 
-                    // In HBox, default cross-axis alignment centers fixed-height controls cleanly.
-                    let exp_v = is_expanding(app.widgets[ch.index].policy_v) && app.widgets[ch.index].fixed_h < 0.0;
+                    // In HBox, fixed controls center vertically while expanding containers fill cross-axis height.
+                    let exp_v = app.widgets[ch.index].fixed_h < 0.0 &&
+                        (is_expanding(app.widgets[ch.index].policy_v) || container_wants_expand_v(app, ch));
                     let cross_align = if !exp_v {
                         match app.widgets[ch.index].align_v {
                             Stretch => Align.Center,

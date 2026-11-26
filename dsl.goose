@@ -54,6 +54,8 @@ fn fixed(u: Ui, w: f32, h: f32) -> Ui { u.app.set_fixed_size(u.parent, w, h); re
 fn width(u: Ui, w: f32) -> Ui { u.app.set_fixed_width(u.parent, w); return u; }
 fn height(u: Ui, h: f32) -> Ui { u.app.set_fixed_height(u.parent, h); return u; }
 fn min_size(u: Ui, w: f32, h: f32) -> Ui { u.app.set_min_size(u.parent, w, h); return u; }
+fn max_size(u: Ui, w: f32, h: f32) -> Ui { u.app.set_max_size(u.parent, w, h); return u; }
+fn policy(u: Ui, h: SizePolicy, v: SizePolicy) -> Ui { u.app.set_size_policy(u.parent, h, v); return u; }
 fn bg(u: Ui, c: Color) -> Ui { u.app.set_bg(u.parent, c); return u; }
 fn border(u: Ui, c: Color, w: f32 = 1.0) -> Ui { u.app.set_border(u.parent, c, w); return u; }
 fn radius(u: Ui, r: f32) -> Ui { u.app.set_radius(u.parent, r); return u; }

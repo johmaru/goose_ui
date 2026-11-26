@@ -69,7 +69,7 @@ u.padding(16.0).spacing(10.0).bg(goose_ui::color_hex(0x1E222F)).radius(8.0);
 ```
 
 Available `Ui` methods:
-`padding`, `padding_m`, `spacing`, `stretch`, `fixed`, `width`, `height`, `min_size`, `bg`, `border`, `radius`, `action`, `name`, `bind`, `layout_kind`, `form_label_width`, `self_node`, `id`.
+`padding`, `padding_m`, `spacing`, `stretch`, `fixed`, `width`, `height`, `min_size`, `max_size`, `policy`, `bg`, `border`, `radius`, `action`, `name`, `bind`, `layout_kind`, `form_label_width`, `self_node`, `id`.
 
 Translated `Ui` builders (auto-retranslate when `app.set_locale(...)` switches languages):
 `tr_label`, `tr_button`, `tr_checkbox`, `tr_radio`, `tr_toggle`, `tr_line_edit`, `tr_group_box`, `tr_tab`.
@@ -89,8 +89,8 @@ Translated `Ui` builders (auto-retranslate when `app.set_locale(...)` switches l
 | --- | --- |
 | `.stretch(weight)` | Shares remaining `VBox`/`HBox` space proportionally (e.g. `1.0` vs `2.0` gives a 1:2 split) |
 | `.fixed(w, h)` / `.width(w)` / `.height(h)` | Sets fixed dimensions (and `SizePolicy.Fixed`) |
-| `.min_size(w, h)` / `.max_size(w, h)` | Minimum and maximum size constraints (applied on both main and cross axes) |
-| `.policy(h, v)` | Explicit `SizePolicy` (`Fixed`, `Minimum`, `Preferred`, `Expanding`) |
+| `.min_size(w, h)` / `.max_size(w, h)` | Minimum and maximum size constraints (applied in `VBox`, `HBox`, and `ScrollArea` cross-axis widths) |
+| `.policy(h, v)` | Explicit `SizePolicy` (`Fixed`, `Minimum`, `Preferred`, `Expanding`); containers with `Expanding` vertical children also stretch vertically inside `HBox` automatically |
 | `.align(h, v)` | Alignment inside parent cell (`Align.Start`, `Center`, `End`, `Stretch`) |
 | `u.spacer(stretch)` | Flexible empty space (useful for right-aligning button rows) |
 | `u.separator(orientation)` | Horizontal or vertical divider line |

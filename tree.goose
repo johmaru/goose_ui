@@ -1329,6 +1329,14 @@ fn center_window_on_monitor(app: App&, win: WindowId, monitor_index: i32) {
     center_window_in_rect(app, win, monitor_work_area(monitor_index));
 }
 
+// Configures a minimum client-area size enforced via WM_GETMINMAXINFO on real Win32 windows.
+fn set_window_min_size(app: App&, win: WindowId, min_w: i32, min_h: i32) {
+    guard app.valid_window(win) else { return; }
+    if !app.windows[win.index].headless && app.windows[win.index].hwnd.is_valid() {
+        let _ok = app.windows[win.index].hwnd.set_min_size(min_w, min_h);
+    }
+}
+
 fn set_window_title_raw(app: App&, win: WindowId, title: const u8[:]) {
     guard app.valid_window(win) else { return; }
     str_set(app.str_pool, app.windows[win.index].title, title);
